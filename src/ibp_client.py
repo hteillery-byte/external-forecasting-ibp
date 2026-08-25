@@ -105,6 +105,10 @@ class IBPKeyFigureClient:
         else:
             last_err = f"HTTP {r.status_code}: {r.text[:300]}"
 
+        # Guardamos por qué falló SAP_COM_0720 aunque el fallback a 0143 funcione —
+        # si no, el fallback "tapa" un problema real de autorización en el arrangement primario.
+        svc0720_error = str(last_err)
+
         try:
             r = self._session.get(
                 f"{self._base(EXTRACT_SVC)}/",
@@ -115,7 +119,10 @@ class IBPKeyFigureClient:
                 verify=self.verify_ssl,
             )
             if r.ok:
-                return {"ok": True, "service": "SAP_COM_0143", "planning_areas": []}
+                return {
+                    "ok": True, "service": "SAP_COM_0143", "planning_areas": [],
+                    "svc0720_error": svc0720_error,
+                }
             last_err = f"HTTP {r.status_code}: {r.text[:300]}"
         except requests.RequestException as exc:
             last_err = exc

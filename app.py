@@ -66,6 +66,8 @@ with tab_conn:
                 "**La escritura a IBP (Tab 4) requiere SAP_COM_0720** — revisa por qué el arrangement "
                 "primario no respondió antes de intentar exportar Forecast/Ex Post."
             )
+            if conn_result.get("svc0720_error"):
+                st.code(conn_result["svc0720_error"], language=None)
 
         discovered = conn_result.get("planning_areas") or []
         if discovered:
@@ -102,7 +104,17 @@ with tab_hist:
                 help="El nivel diario suele ser PERIODID1_TSTAMP; confirmar contra $metadata de la Planning Area.",
             )
         with c3:
-            use_planning_api = st.checkbox("Usar SAP_COM_0720 (recomendado)", value=True)
+            conn_result = st.session_state.get("conn_result") or {}
+            default_use_0720 = conn_result.get("service") != "SAP_COM_0143"
+            use_planning_api = st.checkbox(
+                "Usar SAP_COM_0720 (recomendado)",
+                value=default_use_0720,
+                help=(
+                    "Desmarcado automáticamente porque la Tab 1 conectó por el fallback SAP_COM_0143. "
+                    "Nota: por 0143 solo se puede LEER — la escritura en Tab 4 sí necesita 0720."
+                    if not default_use_0720 else None
+                ),
+            )
         filter_str = st.text_input(
             "Filtro adicional ($filter OData, opcional)",
             placeholder=f"{period_field} ge datetime'2025-01-01T00:00:00'",
