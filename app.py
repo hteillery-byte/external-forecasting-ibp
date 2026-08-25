@@ -64,7 +64,7 @@ with tab_hist:
     else:
         c1, c2, c3 = st.columns(3)
         with c1:
-            hist_kf = st.text_input("Key Figure histórica", placeholder="p.ej. ACTUALSQTY o CONSENSUSDEMAND")
+            hist_kf = st.text_input("Key Figure histórica", value="ZACTUALSQTYDAY")
         with c2:
             period_field = st.selectbox(
                 "Columna de período (nivel día)",

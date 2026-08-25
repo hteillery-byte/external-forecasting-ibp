@@ -64,11 +64,22 @@ src/
   en `forecast_engine._fit_one`.
 
 ---
+## Key Figures reales del tenant (confirmadas por el cliente)
+
+- **`ZACTUALSQTYDAY`** — demanda histórica diaria real. Precargada como
+  default en el campo "Key Figure histórica" de la Tab 2 (`app.py`).
+- **`ZPLANNEDPRICEDAY`** — existe en el tenant pero **decisión explícita del
+  cliente: no se trae, no se usa** (2026-08-25). Se evaluó usarla para
+  filtrar días sin surtido (precio 0/null ≈ producto no asortido, para no
+  confundirlo con demanda real cero), pero el cliente pidió no incorporarla
+  por ahora. **No reintroducir esta lógica sin que el cliente lo pida
+  explícitamente de nuevo.**
+
+---
 ## Pendiente / no verificado con datos reales
 
-- Nombres técnicos reales de las Key Figures del tenant (histórico,
-  Forecast destino, Ex Post destino) — quedan como inputs de la UI, sin
-  hardcodear.
+- Nombres técnicos reales de las Key Figures **destino** (Forecast, Ex Post)
+  — quedan como inputs de la UI, sin hardcodear.
 - Nivel de granularidad real del Planning Area (confirmar `PERIODID{N}`
   diario contra `$metadata`).
 - Volumen real de combinaciones PRDID-CUSTID-LOCID — define si
