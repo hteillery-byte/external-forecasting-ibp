@@ -71,7 +71,7 @@ def render_total_summary_chart(series_specs: list[tuple[str, pd.DataFrame, str, 
     for name, df, date_col, value_col in series_specs:
         if df is None or df.empty:
             continue
-        agg = df.groupby(date_col)[value_col].sum().reset_index().sort_values(date_col)
+        agg = df.groupby(date_col)[value_col].sum().reset_index()  # groupby ya ordena por date_col (sort=True default)
         fig.add_trace(go.Scatter(x=agg[date_col], y=agg[value_col], name=name, mode="lines"))
         any_data = True
     if not any_data:
@@ -412,9 +412,21 @@ with tab_fc:
                     mime="text/csv",
                 )
 
+            fitted_combos = summary.ex_post_df[["PRDID", "CUSTID", "LOCID"]].drop_duplicates()
+            history_fitted = history.merge(fitted_combos, on=["PRDID", "CUSTID", "LOCID"], how="inner")
+            n_total_combos = history[["PRDID", "CUSTID", "LOCID"]].drop_duplicates().shape[0]
+            n_fitted_combos = len(fitted_combos)
+
             st.markdown("### Resumen total (todas las combinaciones sumadas por fecha)")
+            if n_fitted_combos < n_total_combos:
+                st.caption(
+                    f"'Real histórico' acá solo suma las {n_fitted_combos:,} combinaciones que sí se "
+                    f"ajustaron (de {n_total_combos:,} totales) — para comparar Real vs. Ex Post/Forecast "
+                    "sobre la misma población. Las que quedaron fuera (intermitentes o con error) no "
+                    "están en ninguna de las 3 líneas."
+                )
             render_total_summary_chart([
-                ("Real histórico (total)", history, "FECHA", "CANTIDAD"),
+                ("Real histórico (total)", history_fitted, "FECHA", "CANTIDAD"),
                 ("Ex Post (total)", summary.ex_post_df, "FECHA", "VALUE"),
                 ("Forecast (total)", summary.forecast_df, "FECHA", "VALUE"),
             ])
@@ -534,9 +546,12 @@ with tab_backtest:
             )
 
             st.markdown("### Resumen total (todas las combinaciones sumadas por fecha)")
+            # Una sola pasada de agregación sobre detail_df (puede ser ~millones de filas a
+            # escala real) en vez de un groupby por separado para ACTUAL y para FORECAST.
+            detail_agg = backtest_summary.detail_df.groupby("FECHA", as_index=False)[["ACTUAL", "FORECAST"]].sum()
             render_total_summary_chart([
-                ("Real (holdout, total)", backtest_summary.detail_df, "FECHA", "ACTUAL"),
-                ("Forecast ciego (total)", backtest_summary.detail_df, "FECHA", "FORECAST"),
+                ("Real (holdout, total)", detail_agg, "FECHA", "ACTUAL"),
+                ("Forecast ciego (total)", detail_agg, "FECHA", "FORECAST"),
             ])
 
             combos_ok = summary_df.dropna(subset=["MAPE_%"])[["PRDID", "CUSTID", "LOCID"]]
@@ -621,11 +636,14 @@ with tab_combined:
         combined_df = st.session_state["combined_df"]
         if combined_df is not None and not combined_df.empty:
             st.markdown("### Resumen total (todas las combinaciones sumadas por fecha)")
+            # Una sola pasada de agregación por (SEGMENTO, FECHA) sobre todo combined_df,
+            # en vez de filtrar el dataframe completo 4 veces (una por segmento).
+            segment_agg = combined_df.groupby(["SEGMENTO", "FECHA"], as_index=False)["VALOR"].sum()
             render_total_summary_chart([
-                ("Real histórico (total)", combined_df[combined_df.SEGMENTO == REAL], "FECHA", "VALOR"),
-                ("Ex Post (total)", combined_df[combined_df.SEGMENTO == EX_POST], "FECHA", "VALOR"),
-                ("Test Phase (total)", combined_df[combined_df.SEGMENTO == TEST_PHASE_FORECAST], "FECHA", "VALOR"),
-                ("Forecast futuro (total)", combined_df[combined_df.SEGMENTO == FORECAST_FUTURO], "FECHA", "VALOR"),
+                ("Real histórico (total)", segment_agg[segment_agg.SEGMENTO == REAL], "FECHA", "VALOR"),
+                ("Ex Post (total)", segment_agg[segment_agg.SEGMENTO == EX_POST], "FECHA", "VALOR"),
+                ("Test Phase (total)", segment_agg[segment_agg.SEGMENTO == TEST_PHASE_FORECAST], "FECHA", "VALOR"),
+                ("Forecast futuro (total)", segment_agg[segment_agg.SEGMENTO == FORECAST_FUTURO], "FECHA", "VALOR"),
             ])
 
             combos = sorted(set(zip(combined_df.PRDID, combined_df.CUSTID, combined_df.LOCID)))
