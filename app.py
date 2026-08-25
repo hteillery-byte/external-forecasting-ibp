@@ -3,6 +3,8 @@ de Key Figures en SAP IBP vía SAP_COM_0720 (primario) / SAP_COM_0143 (fallback 
 """
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -14,6 +16,24 @@ from src.ibp_client import IBPError, IBPKeyFigureClient
 from src.ibp_export import push_to_ibp
 from src.ibp_read import read_history
 from src.period_format import add_period_label_column, format_period_label, infer_period_granularity
+
+def make_progress_callback(progress_bar, progress_text):
+    """Callback compartido para run_mass_forecast/run_backtest: barra + conteo
+    de modelos usado en vivo (tbats/seasonal_grey/intermitente/error) + ETA."""
+    tally: dict[str, int] = {}
+    t0 = time.monotonic()
+
+    def _on_progress(done: int, total: int, result) -> None:
+        key = result.model_used if result.model_used else "error"
+        tally[key] = tally.get(key, 0) + 1
+        elapsed = time.monotonic() - t0
+        eta_s = (elapsed / done) * (total - done) if done else 0
+        progress_bar.progress(done / total)
+        tally_str = " · ".join(f"{k}={v}" for k, v in sorted(tally.items()))
+        progress_text.info(f"{done:,} / {total:,} combinaciones · {elapsed:.0f}s transcurridos · ETA ~{eta_s:.0f}s · {tally_str}")
+
+    return _on_progress
+
 
 st.set_page_config(page_title="External Forecasting IBP", layout="wide")
 st.title("External Forecasting IBP — TBATS y Modelo Gris Estacional")
@@ -310,8 +330,11 @@ with tab_fc:
                 n_jobs=int(n_jobs),
                 tbats_fast=tbats_fast,
             )
-            with st.spinner(f"Ajustando modelos para {history[['PRDID','CUSTID','LOCID']].drop_duplicates().shape[0]} combinaciones..."):
-                summary = run_mass_forecast(history, cfg)
+            progress_bar = st.progress(0.0)
+            progress_text = st.empty()
+            summary = run_mass_forecast(history, cfg, on_progress=make_progress_callback(progress_bar, progress_text))
+            progress_bar.empty()
+            progress_text.empty()
             st.session_state["summary"] = summary
 
         summary = st.session_state["summary"]
@@ -431,9 +454,14 @@ with tab_backtest:
                 n_jobs=int(bt_n_jobs),
                 tbats_fast=bt_tbats_fast,
             )
-            n_combos = history[["PRDID", "CUSTID", "LOCID"]].drop_duplicates().shape[0]
-            with st.spinner(f"Corriendo Test Phase ({test_start} a {test_end}) para {n_combos} combinaciones..."):
-                backtest_summary = run_backtest(history, test_start, test_end, bt_cfg)
+            progress_bar = st.progress(0.0)
+            progress_text = st.empty()
+            backtest_summary = run_backtest(
+                history, test_start, test_end, bt_cfg,
+                on_progress=make_progress_callback(progress_bar, progress_text),
+            )
+            progress_bar.empty()
+            progress_text.empty()
             st.session_state["backtest_summary"] = backtest_summary
 
         backtest_summary = st.session_state["backtest_summary"]
@@ -526,10 +554,16 @@ with tab_combined:
             if training_history.empty:
                 st.error(f"No hay histórico cargado antes de {v_forecast_start} — no se puede entrenar.")
             else:
-                with st.spinner("Corriendo Ex Post + Forecast futuro sobre el set de entrenamiento..."):
-                    mass_summary = run_mass_forecast(training_history, v_cfg)
-                with st.spinner("Corriendo Test Phase..."):
-                    backtest_summary = run_backtest(history, v_test_start, v_test_end, v_cfg)
+                st.caption("Ex Post + Forecast futuro:")
+                pb1, pt1 = st.progress(0.0), st.empty()
+                mass_summary = run_mass_forecast(training_history, v_cfg, on_progress=make_progress_callback(pb1, pt1))
+                pb1.empty(); pt1.empty()
+
+                st.caption("Test Phase:")
+                pb2, pt2 = st.progress(0.0), st.empty()
+                backtest_summary = run_backtest(history, v_test_start, v_test_end, v_cfg, on_progress=make_progress_callback(pb2, pt2))
+                pb2.empty(); pt2.empty()
+
                 st.session_state["combined_df"] = build_combined_view(training_history, mass_summary, backtest_summary)
 
         combined_df = st.session_state["combined_df"]

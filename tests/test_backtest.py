@@ -93,3 +93,20 @@ def test_test_end_before_test_start_raises():
     hist = _series_row("P1", "C1", "L1", "2024-01-01", 30)
     with pytest.raises(ValueError):
         run_backtest(hist, "2025-05-31", "2025-01-01", RunConfig())
+
+
+def test_on_progress_called_once_per_combo():
+    hist = pd.concat([
+        _series_row("P1", "C1", "L1", "2024-01-01", 200),
+        _series_row("P2", "C1", "L1", "2024-01-01", 200),
+    ], ignore_index=True)
+
+    calls = []
+    run_backtest(
+        hist, "2024-06-01", "2024-06-10", RunConfig(model="seasonal_grey", n_jobs=1),
+        on_progress=lambda done, total, result: calls.append((done, total, result.prdid)),
+    )
+
+    assert len(calls) == 2
+    assert [c[0] for c in calls] == [1, 2]
+    assert all(c[1] == 2 for c in calls)

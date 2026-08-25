@@ -60,3 +60,22 @@ def test_missing_required_columns_raises():
     bad = pd.DataFrame({"PRDID": ["P1"], "CUSTID": ["C1"]})
     with pytest.raises(ValueError):
         run_mass_forecast(bad, RunConfig())
+
+
+def test_on_progress_called_once_per_combo_with_correct_total():
+    hist = pd.concat([
+        _history_row("P1", "C1", "L1", 10),
+        _history_row("P2", "C1", "L1", 10),
+        _history_row("P3", "C1", "L1", 10),
+    ], ignore_index=True)
+
+    calls = []
+    run_mass_forecast(
+        hist, RunConfig(model="seasonal_grey", horizon_days=5, n_jobs=1),
+        on_progress=lambda done, total, result: calls.append((done, total, result.prdid)),
+    )
+
+    assert len(calls) == 3
+    assert [c[0] for c in calls] == [1, 2, 3]  # secuencial: orden garantizado y creciente
+    assert all(c[1] == 3 for c in calls)
+    assert {c[2] for c in calls} == {"P1", "P2", "P3"}

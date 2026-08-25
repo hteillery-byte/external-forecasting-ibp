@@ -8,6 +8,7 @@ sobre el histórico) y Forecast (proyección a futuro).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Literal
@@ -130,12 +131,22 @@ def _fit_one(prdid: str, custid: str, locid: str, series: pd.Series, cfg: RunCon
         return ComboResult(prdid, custid, locid, None, None, None, error=str(exc))
 
 
-def run_mass_forecast(history: pd.DataFrame, cfg: RunConfig, value_col: str = "CANTIDAD") -> RunSummary:
+def run_mass_forecast(
+    history: pd.DataFrame,
+    cfg: RunConfig,
+    value_col: str = "CANTIDAD",
+    on_progress: Callable[[int, int, ComboResult], None] | None = None,
+) -> RunSummary:
     """Ejecuta el pronóstico masivo sobre un histórico en formato largo.
 
     ``history`` debe tener columnas PRDID, CUSTID, LOCID, FECHA (datetime) y
     ``value_col`` (cantidad histórica diaria). Series con huecos de fecha se
     completan a diario con 0 antes de ajustar.
+
+    ``on_progress(completadas, total, ultimo_resultado)`` se llama después de
+    CADA combinación (tanto en modo secuencial como en paralelo) — sin esto,
+    un batch de cientos/miles de combinaciones no da ninguna señal de avance
+    hasta terminar del todo.
     """
     required = set(DIM_COLS + ["FECHA", value_col])
     missing = required - set(history.columns)
@@ -149,13 +160,22 @@ def run_mass_forecast(history: pd.DataFrame, cfg: RunConfig, value_col: str = "C
         s = s.asfreq("D", fill_value=0.0)
         tasks.append((prdid, custid, locid, s))
 
+    total = len(tasks)
+    results: list[ComboResult] = []
+
     if cfg.n_jobs <= 1:
-        results = [_fit_one(p, c, l, s, cfg) for p, c, l, s in tasks]
+        for p, c, l, s in tasks:
+            r = _fit_one(p, c, l, s, cfg)
+            results.append(r)
+            if on_progress:
+                on_progress(len(results), total, r)
     else:
-        results = []
         with ProcessPoolExecutor(max_workers=cfg.n_jobs) as pool:
             futures = {pool.submit(_fit_one, p, c, l, s, cfg): (p, c, l) for p, c, l, s in tasks}
             for fut in as_completed(futures):
-                results.append(fut.result())
+                r = fut.result()
+                results.append(r)
+                if on_progress:
+                    on_progress(len(results), total, r)
 
     return RunSummary(results=results)

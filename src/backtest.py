@@ -23,6 +23,7 @@ forecasting algorithm" (2023).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 
@@ -167,8 +168,12 @@ def run_backtest(
     test_end: str | pd.Timestamp,
     cfg: RunConfig,
     value_col: str = "CANTIDAD",
+    on_progress: Callable[[int, int, BacktestComboResult], None] | None = None,
 ) -> BacktestSummary:
     """Ejecuta el Test Phase (backtest real) sobre un histórico en formato largo.
+
+    ``on_progress(completadas, total, ultimo_resultado)`` se llama después de
+    cada combinación, igual que en ``forecast_engine.run_mass_forecast``.
 
     El holdout es la ventana de CALENDARIO [``test_start``, ``test_end``] (ambos
     inclusive) — no "los últimos N días de lo que se haya cargado". El
@@ -193,16 +198,25 @@ def run_backtest(
         s = s.asfreq("D", fill_value=0.0)
         tasks.append((prdid, custid, locid, s))
 
+    total = len(tasks)
+    results: list[BacktestComboResult] = []
+
     if cfg.n_jobs <= 1:
-        results = [_backtest_one(p, c, l, s, test_start, test_end, cfg) for p, c, l, s in tasks]
+        for p, c, l, s in tasks:
+            r = _backtest_one(p, c, l, s, test_start, test_end, cfg)
+            results.append(r)
+            if on_progress:
+                on_progress(len(results), total, r)
     else:
-        results = []
         with ProcessPoolExecutor(max_workers=cfg.n_jobs) as pool:
             futures = {
                 pool.submit(_backtest_one, p, c, l, s, test_start, test_end, cfg): (p, c, l)
                 for p, c, l, s in tasks
             }
             for fut in as_completed(futures):
-                results.append(fut.result())
+                r = fut.result()
+                results.append(r)
+                if on_progress:
+                    on_progress(len(results), total, r)
 
     return BacktestSummary(results=results, test_start=test_start, test_end=test_end)

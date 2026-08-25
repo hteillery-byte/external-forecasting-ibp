@@ -148,6 +148,17 @@ src/
   caso puntual actual (no relativa a "hoy"), aunque ya haya pasado respecto
   a la fecha real de la sesión. Escalabilidad/generalización a "hoy
   dinámico" queda pendiente, no pedida todavía.
+- **Progreso en vivo para `run_mass_forecast`/`run_backtest` (2026-08-25)**:
+  ambas aceptan `on_progress(completadas, total, ultimo_resultado)`,
+  llamado tras CADA combinación (secuencial y en paralelo vía
+  `as_completed`). Sin esto, un batch de cientos/miles de combinaciones no
+  daba ninguna señal hasta terminar del todo — el cliente reportó no saber
+  si una corrida de 248 combinaciones (`tbats` modo rápido, `n_jobs=1`,
+  ~17 min esperados según el benchmark de 3 años/4.2s por combo) estaba
+  viva o congelada. `app.py::make_progress_callback` es el helper
+  compartido (barra + tally de modelos usados en vivo + ETA) usado en
+  Tabs 3, 4 y 5 — no duplicar esta lógica si se agrega un cuarto lugar que
+  corra estas funciones.
 
 ---
 ## Key Figures reales del tenant (confirmadas por el cliente)
