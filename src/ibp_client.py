@@ -89,8 +89,17 @@ class IBPKeyFigureClient:
             )
             if r.ok:
                 results = r.json().get("d", {}).get("results", [])
-                pas = [row.get("PlanningAreaId") or row.get("PlanningArea") for row in results]
-                return {"ok": True, "service": "SAP_COM_0720", "planning_areas": [p for p in pas if p]}
+                pas = [
+                    row.get("PlanningAreaId") or row.get("PlanningArea") or row.get("PLANNINGAREAID")
+                    for row in results
+                ]
+                pas = [p for p in pas if p]
+                out = {"ok": True, "service": "SAP_COM_0720", "planning_areas": pas}
+                if results and not pas:
+                    # El campo con el ID no calzó con ninguno de los nombres esperados —
+                    # se adjunta la fila cruda para diagnosticar el esquema real del tenant.
+                    out["raw_sample"] = results[0]
+                return out
         except requests.RequestException as exc:
             last_err: Exception | str = exc
         else:

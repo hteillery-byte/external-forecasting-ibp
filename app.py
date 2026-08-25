@@ -21,6 +21,7 @@ st.caption(
 
 for key, default in {
     "client": None,
+    "conn_result": None,
     "history": None,
     "summary": None,
 }.items():
@@ -48,12 +49,41 @@ with tab_conn:
             result = client.test_connection()
         if result["ok"]:
             st.session_state["client"] = client
-            st.success(f"Conectado vía {result['service']}. Planning Areas visibles: {result['planning_areas'] or '(no listadas por este servicio)'}")
+            st.session_state["conn_result"] = result
         else:
+            st.session_state["client"] = None
+            st.session_state["conn_result"] = None
             st.error(f"No se pudo conectar: {result.get('error')}")
 
-    if st.session_state["client"]:
-        st.info(f"Sesión activa · Planning Area = `{st.session_state['client'].planning_area}`")
+    conn_result = st.session_state.get("conn_result")
+    if st.session_state["client"] and conn_result:
+        pa_typed = st.session_state["client"].planning_area
+        st.info(f"Sesión activa · Planning Area ingresada = `{pa_typed}` · conectado vía **{conn_result['service']}**")
+
+        if conn_result["service"] == "SAP_COM_0143":
+            st.warning(
+                "La conexión se estableció por SAP_COM_0143 (fallback), no por SAP_COM_0720. "
+                "**La escritura a IBP (Tab 4) requiere SAP_COM_0720** — revisa por qué el arrangement "
+                "primario no respondió antes de intentar exportar Forecast/Ex Post."
+            )
+
+        discovered = conn_result.get("planning_areas") or []
+        if discovered:
+            match = pa_typed in discovered
+            (st.success if match else st.error)(
+                f"Planning Areas detectadas por IBP: {discovered}"
+                + ("" if match else f" — **`{pa_typed}` no está en esa lista, revisa mayúsculas/nombre exacto**.")
+            )
+        else:
+            st.warning(
+                "IBP no devolvió ninguna Planning Area en `PlanningAreaSet` — no se pudo validar que "
+                f"`{pa_typed}` sea un nombre técnico correcto. Si la lectura en Tab 2 da 404 "
+                "'Resource not found for the segment', ese es probablemente el motivo: el ID escrito "
+                "no calza exactamente con el nombre real de la Planning Area en el tenant."
+            )
+            if conn_result.get("raw_sample"):
+                st.caption("`PlanningAreaSet` sí devolvió filas, pero con campos no reconocidos. Fila cruda:")
+                st.json(conn_result["raw_sample"])
 
 # ----------------------------------------------------------------- Tab 2
 with tab_hist:
