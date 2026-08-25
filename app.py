@@ -1,0 +1,213 @@
+"""SMU Forecast — pronóstico masivo (TBATS + Gris Estacional) con lectura/escritura
+directa de Key Figures en SAP IBP vía SAP_COM_0720 (primario) / SAP_COM_0143 (fallback lectura).
+"""
+from __future__ import annotations
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from src.forecast_engine import RunConfig, run_mass_forecast
+from src.ibp_client import IBPError, IBPKeyFigureClient
+from src.ibp_export import push_to_ibp
+from src.ibp_read import read_history
+
+st.set_page_config(page_title="SMU Forecast — External Forecasting IBP", layout="wide")
+st.title("SMU Forecast — TBATS y Modelo Gris Estacional")
+st.caption(
+    "Pronóstico de demanda diaria y Ex Post a nivel masivo (PRDID × CUSTID × LOCID), "
+    "con lectura y escritura directa de Key Figures en SAP IBP (SAP_COM_0720 / SAP_COM_0143)."
+)
+
+for key, default in {
+    "client": None,
+    "history": None,
+    "summary": None,
+}.items():
+    st.session_state.setdefault(key, default)
+
+tab_conn, tab_hist, tab_fc, tab_export = st.tabs(
+    ["1 · Conexión IBP", "2 · Histórico", "3 · Pronóstico masivo", "4 · Exportar a IBP"]
+)
+
+# ----------------------------------------------------------------- Tab 1
+with tab_conn:
+    st.subheader("Conexión — Communication Arrangement SAP_COM_0720 / SAP_COM_0143")
+    c1, c2 = st.columns(2)
+    with c1:
+        tenant_url = st.text_input("Tenant URL", placeholder="my12345-api.scmibp.ondemand.com")
+        user = st.text_input("Usuario de comunicación")
+        password = st.text_input("Password", type="password")
+    with c2:
+        planning_area = st.text_input("Planning Area")
+        verify_ssl = st.checkbox("Verificar certificado SSL", value=True)
+
+    if st.button("Probar conexión", type="primary", disabled=not (tenant_url and user and password and planning_area)):
+        client = IBPKeyFigureClient(tenant_url, user, password, planning_area, verify_ssl=verify_ssl)
+        with st.spinner("Conectando a IBP..."):
+            result = client.test_connection()
+        if result["ok"]:
+            st.session_state["client"] = client
+            st.success(f"Conectado vía {result['service']}. Planning Areas visibles: {result['planning_areas'] or '(no listadas por este servicio)'}")
+        else:
+            st.error(f"No se pudo conectar: {result.get('error')}")
+
+    if st.session_state["client"]:
+        st.info(f"Sesión activa · Planning Area = `{st.session_state['client'].planning_area}`")
+
+# ----------------------------------------------------------------- Tab 2
+with tab_hist:
+    st.subheader("Leer histórico de demanda diaria desde IBP")
+    client: IBPKeyFigureClient | None = st.session_state["client"]
+    if not client:
+        st.warning("Conéctate a IBP en la pestaña 1 primero.")
+    else:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            hist_kf = st.text_input("Key Figure histórica", placeholder="p.ej. ACTUALSQTY o CONSENSUSDEMAND")
+        with c2:
+            period_field = st.selectbox(
+                "Columna de período (nivel día)",
+                ["PERIODID1_TSTAMP", "PERIODID2_TSTAMP", "PERIODID0_TSTAMP"],
+                help="El nivel diario suele ser PERIODID1_TSTAMP; confirmar contra $metadata de la Planning Area.",
+            )
+        with c3:
+            use_planning_api = st.checkbox("Usar SAP_COM_0720 (recomendado)", value=True)
+        filter_str = st.text_input(
+            "Filtro adicional ($filter OData, opcional)",
+            placeholder=f"{period_field} ge datetime'2025-01-01T00:00:00'",
+        )
+
+        if st.button("Leer histórico", type="primary", disabled=not hist_kf):
+            try:
+                with st.spinner("Leyendo key figure desde IBP..."):
+                    history = read_history(client, hist_kf, period_field, filter_str or None, use_planning_api)
+                st.session_state["history"] = history
+            except IBPError as exc:
+                st.error(str(exc))
+
+        history = st.session_state["history"]
+        if history is not None and not history.empty:
+            n_combos = history[["PRDID", "CUSTID", "LOCID"]].drop_duplicates().shape[0]
+            st.success(
+                f"{len(history):,} filas · {n_combos:,} combinaciones PRDID-CUSTID-LOCID · "
+                f"rango {history['FECHA'].min().date()} a {history['FECHA'].max().date()}"
+            )
+            st.dataframe(history.head(200), use_container_width=True)
+
+# ----------------------------------------------------------------- Tab 3
+with tab_fc:
+    st.subheader("Ejecutar pronóstico masivo")
+    history = st.session_state["history"]
+    if history is None or history.empty:
+        st.warning("Lee el histórico en la pestaña 2 primero.")
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            model_choice = st.selectbox(
+                "Modelo",
+                ["auto", "tbats", "seasonal_grey"],
+                help="auto: TBATS si hay historia suficiente (>=21 días), si no, Gris Estacional.",
+            )
+        with c2:
+            horizon_days = st.number_input("Horizonte de pronóstico (días)", min_value=1, max_value=365, value=14)
+        with c3:
+            season_length = st.number_input("Largo de estación (Gris Estacional)", min_value=2, max_value=31, value=7)
+        with c4:
+            n_jobs = st.number_input("Procesos en paralelo", min_value=1, max_value=16, value=1)
+
+        tbats_fast = st.checkbox(
+            "TBATS modo rápido (recomendado a nivel masivo)",
+            value=True,
+            help=(
+                "Fija la forma del modelo (sin Box-Cox, tendencia no amortiguada, sin ARMA) en vez de "
+                "hacer grid search completo. Sin esto, cada combinación puede tardar 1-2+ minutos y no "
+                "escala a miles de combinaciones. Desactivar solo para analizar una combinación puntual."
+            ),
+        )
+
+        if st.button("Ejecutar pronóstico masivo", type="primary"):
+            cfg = RunConfig(
+                model=model_choice,
+                horizon_days=int(horizon_days),
+                season_length=int(season_length),
+                n_jobs=int(n_jobs),
+                tbats_fast=tbats_fast,
+            )
+            with st.spinner(f"Ajustando modelos para {history[['PRDID','CUSTID','LOCID']].drop_duplicates().shape[0]} combinaciones..."):
+                summary = run_mass_forecast(history, cfg)
+            st.session_state["summary"] = summary
+
+        summary = st.session_state["summary"]
+        if summary is not None:
+            st.markdown("### Resultados")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Ex Post generado", f"{len(summary.ex_post_df):,} filas")
+            m2.metric("Forecast generado", f"{len(summary.forecast_df):,} filas")
+            m3.metric("Combinaciones con error", f"{len(summary.errors_df):,}")
+
+            if not summary.model_usage.empty:
+                st.write("**Uso de modelos por combinación:**")
+                st.bar_chart(summary.model_usage)
+
+            if not summary.errors_df.empty:
+                with st.expander(f"Ver {len(summary.errors_df)} combinaciones con error"):
+                    st.dataframe(summary.errors_df, use_container_width=True)
+
+            combos = sorted(set(zip(summary.ex_post_df.PRDID, summary.ex_post_df.CUSTID, summary.ex_post_df.LOCID)))
+            if combos:
+                sel = st.selectbox("Ver detalle de una combinación", combos, format_func=lambda t: " / ".join(t))
+                prdid, custid, locid = sel
+                actual = history[(history.PRDID == prdid) & (history.CUSTID == custid) & (history.LOCID == locid)]
+                ex_post = summary.ex_post_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid")
+                fcst = summary.forecast_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid")
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=actual.FECHA, y=actual.CANTIDAD, name="Histórico real", mode="lines"))
+                fig.add_trace(go.Scatter(x=ex_post.FECHA, y=ex_post.VALUE, name="Ex Post (ajustado)", mode="lines"))
+                fig.add_trace(go.Scatter(x=fcst.FECHA, y=fcst.VALUE, name="Forecast", mode="lines"))
+                fig.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+# ----------------------------------------------------------------- Tab 4
+with tab_export:
+    st.subheader("Escribir Forecast y Ex Post en SAP IBP")
+    client = st.session_state["client"]
+    summary = st.session_state["summary"]
+    if not client:
+        st.warning("Conéctate a IBP en la pestaña 1 primero.")
+    elif summary is None:
+        st.warning("Ejecuta el pronóstico masivo en la pestaña 3 primero.")
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            forecast_kf = st.text_input("Key Figure destino — Forecast", placeholder="p.ej. ZEXTFORECASTQTY")
+        with c2:
+            ex_post_kf = st.text_input("Key Figure destino — Ex Post", placeholder="p.ej. ZEXTEXPOSTQTY")
+        period_field_out = st.selectbox(
+            "Columna de período destino", ["PERIODID1_TSTAMP", "PERIODID2_TSTAMP", "PERIODID0_TSTAMP"], key="period_out"
+        )
+        do_commit = st.checkbox("Confirmar transacción inmediatamente (DoCommit)", value=True)
+
+        if st.button("Escribir en SAP IBP", type="primary", disabled=not (forecast_kf and ex_post_kf)):
+            with st.spinner("Escribiendo Forecast..."):
+                try:
+                    fc_results = push_to_ibp(client, summary.forecast_df, forecast_kf, period_field_out, do_commit)
+                    st.success(f"Forecast: {len(fc_results)} lote(s) enviados.")
+                    for r in fc_results:
+                        st.write(f"- Transacción `{r.transaction_id}` → **{r.status}** ({r.rows_sent} filas)")
+                        if r.messages:
+                            st.json(r.messages)
+                except IBPError as exc:
+                    st.error(f"Error escribiendo Forecast: {exc}")
+
+            with st.spinner("Escribiendo Ex Post..."):
+                try:
+                    ep_results = push_to_ibp(client, summary.ex_post_df, ex_post_kf, period_field_out, do_commit)
+                    st.success(f"Ex Post: {len(ep_results)} lote(s) enviados.")
+                    for r in ep_results:
+                        st.write(f"- Transacción `{r.transaction_id}` → **{r.status}** ({r.rows_sent} filas)")
+                        if r.messages:
+                            st.json(r.messages)
+                except IBPError as exc:
+                    st.error(f"Error escribiendo Ex Post: {exc}")
