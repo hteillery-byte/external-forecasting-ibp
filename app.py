@@ -11,6 +11,7 @@ from src.forecast_engine import RunConfig, run_mass_forecast
 from src.ibp_client import IBPError, IBPKeyFigureClient
 from src.ibp_export import push_to_ibp
 from src.ibp_read import read_history
+from src.period_format import add_period_label_column, format_period_label, infer_period_granularity
 
 st.set_page_config(page_title="External Forecasting IBP", layout="wide")
 st.title("External Forecasting IBP — TBATS y Modelo Gris Estacional")
@@ -183,11 +184,21 @@ with tab_hist:
         history = st.session_state["history"]
         if history is not None and not history.empty:
             n_combos = history[["PRDID", "CUSTID", "LOCID"]].drop_duplicates().shape[0]
+            granularity = infer_period_granularity(history["FECHA"])
+            granularity_label = {
+                "day": "diaria", "week": "semanal", "month": "mensual",
+                "quarter": "trimestral", "year": "anual",
+            }[granularity]
             st.success(
                 f"{len(history):,} filas · {n_combos:,} combinaciones PRDID-CUSTID-LOCID · "
-                f"rango {history['FECHA'].min().date()} a {history['FECHA'].max().date()}"
+                f"rango {history['FECHA'].min().date()} a {history['FECHA'].max().date()} · "
+                f"granularidad detectada: **{granularity_label}**"
             )
-            st.dataframe(history.head(200), use_container_width=True)
+            preview = add_period_label_column(history.head(200))
+            st.dataframe(
+                preview[["PRDID", "CUSTID", "LOCID", "PERÍODO", "CANTIDAD", "FECHA"]],
+                use_container_width=True,
+            )
 
 # ----------------------------------------------------------------- Tab 3
 with tab_fc:
@@ -256,10 +267,23 @@ with tab_fc:
                 ex_post = summary.ex_post_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid")
                 fcst = summary.forecast_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid")
 
+                all_dates = pd.concat([actual.FECHA, ex_post.FECHA, fcst.FECHA])
+                granularity = infer_period_granularity(all_dates) if not all_dates.empty else "day"
+                hover = "%{customdata}<br>%{y:,.1f}<extra>%{fullData.name}</extra>"
+
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=actual.FECHA, y=actual.CANTIDAD, name="Histórico real", mode="lines"))
-                fig.add_trace(go.Scatter(x=ex_post.FECHA, y=ex_post.VALUE, name="Ex Post (ajustado)", mode="lines"))
-                fig.add_trace(go.Scatter(x=fcst.FECHA, y=fcst.VALUE, name="Forecast", mode="lines"))
+                fig.add_trace(go.Scatter(
+                    x=actual.FECHA, y=actual.CANTIDAD, name="Histórico real", mode="lines",
+                    customdata=[format_period_label(d, granularity) for d in actual.FECHA], hovertemplate=hover,
+                ))
+                fig.add_trace(go.Scatter(
+                    x=ex_post.FECHA, y=ex_post.VALUE, name="Ex Post (ajustado)", mode="lines",
+                    customdata=[format_period_label(d, granularity) for d in ex_post.FECHA], hovertemplate=hover,
+                ))
+                fig.add_trace(go.Scatter(
+                    x=fcst.FECHA, y=fcst.VALUE, name="Forecast", mode="lines",
+                    customdata=[format_period_label(d, granularity) for d in fcst.FECHA], hovertemplate=hover,
+                ))
                 fig.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
