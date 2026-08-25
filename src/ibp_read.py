@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 import pandas as pd
 
@@ -33,9 +34,14 @@ def read_history(
     period_field: str = "PERIODID1_TSTAMP",
     filter_str: str | None = None,
     use_planning_api: bool = True,
+    max_rows: int | None = None,
+    on_page: Callable[[int, int], None] | None = None,
 ) -> pd.DataFrame:
     select_fields = DIM_COLS + [period_field, kf_name]
-    raw = client.read_key_figure(select_fields, filter_str=filter_str, use_planning_api=use_planning_api)
+    raw = client.read_key_figure(
+        select_fields, filter_str=filter_str, use_planning_api=use_planning_api,
+        max_rows=max_rows, on_page=on_page,
+    )
     if raw.empty:
         return pd.DataFrame(columns=DIM_COLS + ["FECHA", "CANTIDAD"])
 

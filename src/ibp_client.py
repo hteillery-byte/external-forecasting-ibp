@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -127,6 +128,8 @@ class IBPKeyFigureClient:
         filter_str: str | None = None,
         use_planning_api: bool = True,
         max_pages: int = 200,
+        max_rows: int | None = None,
+        on_page: Callable[[int, int], None] | None = None,
     ) -> pd.DataFrame:
         """Lee una o más key figures como DataFrame ancho (una columna por field seleccionado).
 
@@ -134,13 +137,20 @@ class IBPKeyFigureClient:
         la columna de período (p.ej. ``PERIODID1_TSTAMP``) y la(s) key
         figure(s) a extraer. El filtro de período/versión va en ``filter_str``
         siguiendo la sintaxis de ``$filter`` de IBP (ver docs/ibp-extract-odata-api.md).
+
+        La paginación vía ``$skip`` es secuencial (una request por página de
+        hasta 5000 filas) — sin acotar con ``filter_str`` (rango de fechas)
+        o ``max_rows``, una key figure de grano fino (p.ej. diario) sobre
+        muchas combinaciones puede tardar minutos y no dar ninguna señal de
+        vida. ``on_page(rows_so_far, page_number)`` se llama después de cada
+        página para que el caller pueda mostrar progreso real.
         """
         svc = PLANNING_SVC if use_planning_api else EXTRACT_SVC
         base_url = f"{self._base(svc)}/{self.planning_area}"
 
         rows: list[dict] = []
         skip = 0
-        for _ in range(max_pages):
+        for page_num in range(1, max_pages + 1):
             params = {
                 "$select": ",".join(select_fields),
                 "$format": "json",
@@ -161,6 +171,10 @@ class IBPKeyFigureClient:
                 raise IBPError(f"Lectura de key figure falló (HTTP {r.status_code}): {r.text[:300]}")
             page = r.json().get("d", {}).get("results", [])
             rows.extend(page)
+            if on_page:
+                on_page(len(rows), page_num)
+            if max_rows and len(rows) >= max_rows:
+                break
             if len(page) < MAX_RECORDS_PER_READ_PAGE:
                 break
             skip += MAX_RECORDS_PER_READ_PAGE

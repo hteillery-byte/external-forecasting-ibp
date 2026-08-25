@@ -97,9 +97,13 @@ with tab_hist:
             hist_kf = st.text_input("Key Figure histórica", value="ZACTUALSQTYDAY")
         with c2:
             period_field = st.selectbox(
-                "Columna de período (nivel día)",
-                ["PERIODID1_TSTAMP", "PERIODID2_TSTAMP", "PERIODID0_TSTAMP"],
-                help="El nivel diario suele ser PERIODID1_TSTAMP; confirmar contra $metadata de la Planning Area.",
+                "Columna de período",
+                ["PERIODID1_TSTAMP", "PERIODID2_TSTAMP", "PERIODID0_TSTAMP", "PERIODID3_TSTAMP", "PERIODID4_TSTAMP"],
+                help=(
+                    "La granularidad de cada PERIODIDx (día/semana/mes/...) depende de cómo se configuró "
+                    "el Time Profile de ESTA Planning Area — no asumas que PERIODID1 es diario sin "
+                    "confirmarlo primero con un rango de fechas chico."
+                ),
             )
         with c3:
             conn_result = st.session_state.get("conn_result") or {}
@@ -113,7 +117,8 @@ with tab_hist:
                     if not default_use_0720 else None
                 ),
             )
-        c4, c5 = st.columns([1, 3])
+
+        c4, c5, c6 = st.columns(3)
         with c4:
             uom = st.text_input(
                 "Unidad de medida (UOMTOID)",
@@ -124,21 +129,55 @@ with tab_hist:
                 ),
             )
         with c5:
-            filter_str = st.text_input(
-                "Filtro adicional ($filter OData, opcional)",
-                placeholder=f"{period_field} ge datetime'2025-01-01T00:00:00'",
-            )
+            date_from = st.date_input("Desde (opcional)", value=None)
+        with c6:
+            date_to = st.date_input("Hasta (opcional)", value=None)
 
-        # UOMTOID debe ir al inicio del $filter, unido con 'and' al resto (regla de IBP —
-        # no puede ir entre paréntesis ni combinado de otra forma).
-        combined_filter = f"UOMTOID eq '{uom}'" + (f" and {filter_str}" if filter_str else "") if uom else filter_str
+        st.caption(
+            "Acota SIEMPRE el rango de fechas en la primera prueba con una granularidad nueva — "
+            "sin acotar, una columna de período fina (diaria o más) sobre todo el histórico puede "
+            "traer millones de filas y tardar minutos sin dar señales de vida."
+        )
+        filter_str = st.text_input(
+            "Filtro adicional ($filter OData, opcional)",
+            placeholder="PRDID eq '24317'",
+        )
+        max_rows = st.number_input(
+            "Límite de filas (corta la lectura al llegar acá)", min_value=0, value=200_000, step=50_000,
+            help="0 = sin límite (no recomendado hasta confirmar la granularidad correcta).",
+        )
+
+        # UOMTOID y el rango de fechas deben ir al inicio del $filter, unidos con 'and'
+        # (regla de IBP para atributos de conversión — no pueden ir entre paréntesis).
+        filter_parts = [f"UOMTOID eq '{uom}'"] if uom else []
+        if date_from:
+            filter_parts.append(f"{period_field} ge datetime'{date_from.isoformat()}T00:00:00'")
+        if date_to:
+            filter_parts.append(f"{period_field} le datetime'{date_to.isoformat()}T00:00:00'")
+        if filter_str:
+            filter_parts.append(filter_str)
+        combined_filter = " and ".join(filter_parts)
 
         if st.button("Leer histórico", type="primary", disabled=not hist_kf):
+            progress_box = st.empty()
+
+            def _on_page(rows_so_far: int, page_num: int) -> None:
+                progress_box.info(f"Leyendo... página {page_num} · {rows_so_far:,} filas acumuladas")
+
             try:
-                with st.spinner("Leyendo key figure desde IBP..."):
-                    history = read_history(client, hist_kf, period_field, combined_filter or None, use_planning_api)
+                history = read_history(
+                    client, hist_kf, period_field, combined_filter or None, use_planning_api,
+                    max_rows=(max_rows or None), on_page=_on_page,
+                )
+                progress_box.empty()
+                if max_rows and len(history) >= max_rows:
+                    st.warning(
+                        f"Se cortó la lectura al llegar al límite de {max_rows:,} filas — "
+                        "el histórico real puede ser más grande. Acota con Desde/Hasta o sube el límite."
+                    )
                 st.session_state["history"] = history
             except IBPError as exc:
+                progress_box.empty()
                 st.error(str(exc))
 
         history = st.session_state["history"]
