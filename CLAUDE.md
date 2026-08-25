@@ -84,6 +84,20 @@ src/
   semana + patrón mensual", la anual quedaría mejor en los modelos de
   mediano/largo plazo). Requiere además >= ~2 años de historia por combo
   para activarse — si no hay suficiente, se ignora sola.
+- **Alcance real corregido por el cliente (2026-08-25): NO son todas las
+  categorías.** Solo 5 de las 8 de la presentación, calzando exacto con las
+  slides 9/19: TBATS → Frutas y Verduras, Fiambrería, Quesos y Huevos,
+  Carnes. Gris Estacional → Textil Hogar. Escala real: ~450 SKU × ~20
+  tiendas ≈ 9.000 combinaciones (no las 150.000 del peor caso inicial) —
+  mucho más manejable, incluso con estacionalidad anual si el cliente la
+  pide. `CATEGORY` es un atributo de `SMUPRODUCT` expuesto como propiedad
+  filtrable directo en la Key Figure (confirmado por el cliente, no dato
+  maestro aparte) — Tab 2 tiene un multiselect con las 8 categorías
+  conocidas + campo de nombre de propiedad editable (`CATEGORY` por
+  defecto) + fallback a "Filtro adicional" si la escritura exacta del
+  tenant difiere. El filtro de categorías se agrega también a `$select`
+  (`extra_select_fields` en `ibp_read.read_history`) porque IBP exige que
+  toda propiedad usada en `$filter` esté también seleccionada.
 - **Lectura excluye valores 0/vacío por defecto** (`{kf} gt 0` en el
   `$filter`, checkbox en Tab 2, activado por defecto): IBP devuelve una fila
   por cada combinación × período aunque el valor sea 0, lo que infla mucho

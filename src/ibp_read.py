@@ -36,8 +36,12 @@ def read_history(
     use_planning_api: bool = True,
     max_rows: int | None = None,
     on_page: Callable[[int, int], None] | None = None,
+    extra_select_fields: list[str] | None = None,
 ) -> pd.DataFrame:
-    select_fields = DIM_COLS + [period_field, kf_name]
+    """``extra_select_fields``: propiedades adicionales a incluir en $select — necesario
+    cuando ``filter_str`` referencia un atributo (p.ej. CATEGORY) que IBP exige tener
+    también seleccionado, no solo filtrado."""
+    select_fields = DIM_COLS + [period_field, kf_name] + (extra_select_fields or [])
     raw = client.read_key_figure(
         select_fields, filter_str=filter_str, use_planning_api=use_planning_api,
         max_rows=max_rows, on_page=on_page,

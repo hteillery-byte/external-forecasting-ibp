@@ -139,6 +139,27 @@ with tab_hist:
             "sin acotar, una columna de período fina (diaria o más) sobre todo el histórico puede "
             "traer millones de filas y tardar minutos sin dar señales de vida."
         )
+
+        CATEGORIAS_SMU = [
+            "CARNES", "FIAMBRERIA", "FRUTAS Y VERDURAS", "PANADERIA",
+            "QUESOS Y HUEVOS", "PGC ALIMENTACION", "PGC NO ALIMENTACION", "TEXTIL HOGAR",
+        ]
+        cc1, cc2 = st.columns([1, 2])
+        with cc1:
+            category_field = st.text_input(
+                "Nombre del campo (atributo SMUPRODUCT)", value="CATEGORY",
+                help="Nombre exacto de la propiedad tal como aparece expuesta en la Key Figure.",
+            )
+        with cc2:
+            categories_selected = st.multiselect(
+                "Categorías a incluir (vacío = todas)", CATEGORIAS_SMU,
+                help=(
+                    "Para TBATS: Frutas y Verduras, Fiambrería, Quesos y Huevos, Carnes. "
+                    "Para Gris Estacional: Textil Hogar. Si tu tenant usa otra escritura exacta, "
+                    "agrégala en 'Filtro adicional' abajo en vez de acá."
+                ),
+            )
+
         filter_str = st.text_input(
             "Filtro adicional ($filter OData, opcional)",
             placeholder="PRDID eq '24317'",
@@ -165,9 +186,13 @@ with tab_hist:
                 ),
             )
 
-        # UOMTOID, el rango de fechas y el filtro de ceros deben ir al inicio del $filter,
-        # unidos con 'and' (regla de IBP para atributos de conversión — no pueden ir entre paréntesis).
+        # UOMTOID debe ir al inicio del $filter, sin paréntesis (regla de IBP para atributos
+        # de conversión). El grupo de categorías va entre paréntesis para que el 'or' interno
+        # no se combine mal con los 'and' que lo rodean.
         filter_parts = [f"UOMTOID eq '{uom}'"] if uom else []
+        if categories_selected and category_field:
+            or_group = " or ".join(f"{category_field} eq '{c}'" for c in categories_selected)
+            filter_parts.append(f"({or_group})")
         if date_from:
             filter_parts.append(f"{period_field} ge datetime'{date_from.isoformat()}T00:00:00'")
         if date_to:
@@ -185,9 +210,10 @@ with tab_hist:
                 progress_box.info(f"Leyendo... página {page_num} · {rows_so_far:,} filas acumuladas")
 
             try:
+                extra_select = [category_field] if (categories_selected and category_field) else None
                 history = read_history(
                     client, hist_kf, period_field, combined_filter or None, use_planning_api,
-                    max_rows=(max_rows or None), on_page=_on_page,
+                    max_rows=(max_rows or None), on_page=_on_page, extra_select_fields=extra_select,
                 )
                 progress_box.empty()
                 if max_rows and len(history) >= max_rows:
