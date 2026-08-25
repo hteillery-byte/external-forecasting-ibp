@@ -54,14 +54,27 @@ src/
   fue removido. Fijado `scikit-learn<1.6` en `requirements.txt`. Si se
   actualiza `tbats` a una versión que ya no dependa de ese kwarg, se puede
   soltar el pin.
-- **`PERIODID{N}_TSTAMP` para nivel diario**: por convención suele ser
-  `PERIODID1_TSTAMP`, pero varía según el Time Profile de la Planning Area
-  real — la UI lo deja seleccionable y hay que confirmarlo contra
-  `$metadata` en el tenant real del cliente (no verificado con datos reales
-  aún, pendiente primera conexión).
+- **`PERIODID{N}_TSTAMP` NO sigue una convención numérica fija** — es
+  específico de cómo se configuró el Time Profile de cada Planning Area.
+  Confirmado con datos reales del tenant SMUPILOTO: `PERIODID0_TSTAMP` es
+  diario, `PERIODID1_TSTAMP` es otra granularidad (mensual, por lo que trajo
+  solo fechas de inicio de mes) — el orden NO es "menor número = más fino".
+  No asumir nunca sin probar con un rango de fechas chico primero. La
+  granularidad real se infiere de los datos (`src/period_format.py
+  infer_period_granularity`), no del nombre de columna.
 - **Selección de modelo `auto`**: TBATS si la serie tiene ≥21 observaciones
   (~3 ciclos semanales), si no, Gris Estacional (funciona desde 4 obs). Motor
   en `forecast_engine._fit_one`.
+- **Lectura excluye valores 0/vacío por defecto** (`{kf} gt 0` en el
+  `$filter`, checkbox en Tab 2, activado por defecto): IBP devuelve una fila
+  por cada combinación × período aunque el valor sea 0, lo que infla mucho
+  el volumen en tenants grandes. Es seguro excluirlos porque
+  `forecast_engine.run_mass_forecast` ya reconstruye los días faltantes
+  localmente con `asfreq('D', fill_value=0.0)` antes de ajustar el modelo —
+  no se pierde información real para TBATS/Gris Estacional. Caveat conocido,
+  no resuelto: esto no distingue "no estaba asortido" de "vendió cero" (ver
+  decisión de no usar `ZPLANNEDPRICEDAY` como filtro de surtido — pendiente
+  si el cliente lo pide más adelante).
 
 ---
 ## Key Figures reales del tenant (confirmadas por el cliente)

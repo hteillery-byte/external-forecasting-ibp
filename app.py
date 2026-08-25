@@ -143,18 +143,37 @@ with tab_hist:
             "Filtro adicional ($filter OData, opcional)",
             placeholder="PRDID eq '24317'",
         )
-        max_rows = st.number_input(
-            "Límite de filas (corta la lectura al llegar acá)", min_value=0, value=200_000, step=50_000,
-            help="0 = sin límite (no recomendado hasta confirmar la granularidad correcta).",
-        )
+        c7, c8 = st.columns([1, 3])
+        with c7:
+            max_rows = st.number_input(
+                "Límite de filas (corta la lectura al llegar acá)", min_value=0, value=200_000, step=50_000,
+                help="0 = sin límite (no recomendado hasta confirmar la granularidad correcta).",
+            )
+        with c8:
+            exclude_zero = st.checkbox(
+                "Excluir valores en 0/vacío al leer (recomendado)",
+                value=True,
+                help=(
+                    "IBP suele devolver una fila por cada combinación PRDID-CUSTID-LOCID × período aunque "
+                    "la cantidad sea 0 — en tenants grandes eso infla el volumen leído sin agregar "
+                    "información real. El motor de pronóstico ya reconstruye los días faltantes con 0 "
+                    "localmente (forecast_engine: asfreq('D', fill_value=0.0)) antes de ajustar el "
+                    "modelo, así que no se pierde nada para TBATS/Gris Estacional al excluirlos acá. "
+                    "Caveat: si un PRDID-CUSTID-LOCID directamente no existe en un período (por ejemplo, "
+                    "antes de su lanzamiento), también quedará relleno con 0 en vez de quedar vacío — "
+                    "no distingue 'sin surtido' de 'vendió cero'."
+                ),
+            )
 
-        # UOMTOID y el rango de fechas deben ir al inicio del $filter, unidos con 'and'
-        # (regla de IBP para atributos de conversión — no pueden ir entre paréntesis).
+        # UOMTOID, el rango de fechas y el filtro de ceros deben ir al inicio del $filter,
+        # unidos con 'and' (regla de IBP para atributos de conversión — no pueden ir entre paréntesis).
         filter_parts = [f"UOMTOID eq '{uom}'"] if uom else []
         if date_from:
             filter_parts.append(f"{period_field} ge datetime'{date_from.isoformat()}T00:00:00'")
         if date_to:
             filter_parts.append(f"{period_field} le datetime'{date_to.isoformat()}T00:00:00'")
+        if exclude_zero:
+            filter_parts.append(f"{hist_kf} gt 0")
         if filter_str:
             filter_parts.append(filter_str)
         combined_filter = " and ".join(filter_parts)
