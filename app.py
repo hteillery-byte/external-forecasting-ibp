@@ -113,15 +113,30 @@ with tab_hist:
                     if not default_use_0720 else None
                 ),
             )
-        filter_str = st.text_input(
-            "Filtro adicional ($filter OData, opcional)",
-            placeholder=f"{period_field} ge datetime'2025-01-01T00:00:00'",
-        )
+        c4, c5 = st.columns([1, 3])
+        with c4:
+            uom = st.text_input(
+                "Unidad de medida (UOMTOID)",
+                value="UMB",
+                help=(
+                    "Obligatorio para key figures de cantidad en PLANNING_DATA_API_SRV — IBP rechaza "
+                    "la lectura sin esto (HTTP 400 'Add property UOMTOID to a filter condition')."
+                ),
+            )
+        with c5:
+            filter_str = st.text_input(
+                "Filtro adicional ($filter OData, opcional)",
+                placeholder=f"{period_field} ge datetime'2025-01-01T00:00:00'",
+            )
+
+        # UOMTOID debe ir al inicio del $filter, unido con 'and' al resto (regla de IBP —
+        # no puede ir entre paréntesis ni combinado de otra forma).
+        combined_filter = f"UOMTOID eq '{uom}'" + (f" and {filter_str}" if filter_str else "") if uom else filter_str
 
         if st.button("Leer histórico", type="primary", disabled=not hist_kf):
             try:
                 with st.spinner("Leyendo key figure desde IBP..."):
-                    history = read_history(client, hist_kf, period_field, filter_str or None, use_planning_api)
+                    history = read_history(client, hist_kf, period_field, combined_filter or None, use_planning_api)
                 st.session_state["history"] = history
             except IBPError as exc:
                 st.error(str(exc))
