@@ -381,27 +381,37 @@ with tab_backtest:
     st.subheader("Test Phase Periods — backtest real contra venta ya conocida")
     st.caption(
         "Igual a como SAP IBP define \"Test Phase Periods\" (pestaña Forecasting Steps del "
-        "Forecast Model): se reservan los últimos N días de cada combinación como set de "
-        "prueba, se entrena SOLO con el resto, y se pronostica a ciegas hacia ese período — "
-        "el resultado se compara contra la venta real ya conocida. SAP recomienda esto por "
-        "sobre el Ex-Post (ajuste in-sample) para elegir el mejor algoritmo, porque el "
-        "Ex-Post puede sobreestimar la precisión."
+        "Forecast Model): se reserva una ventana de calendario como set de prueba, se entrena "
+        "SOLO con lo anterior, y se pronostica a ciegas hacia esa ventana — el resultado se "
+        "compara contra la venta real ya conocida. SAP recomienda esto por sobre el Ex-Post "
+        "(ajuste in-sample) para elegir el mejor algoritmo, porque el Ex-Post puede sobreestimar "
+        "la precisión. **La ventana es de fechas de calendario fijas, no \"los últimos N días de "
+        "hoy\"** — así el resultado no depende de cuándo corras la app."
     )
     history = st.session_state["history"]
     if history is None or history.empty:
         st.warning("Lee el histórico en la pestaña 2 primero.")
     else:
-        b1, b2, b3, b4 = st.columns(4)
+        st.info(
+            f"Histórico cargado: {history['FECHA'].min().date()} a {history['FECHA'].max().date()}. "
+            "La ventana de test de abajo debe caer DENTRO de este rango — si en la Tab 2 acotaste "
+            "'Hasta' antes del fin de la ventana de test, esos días simplemente no van a estar "
+            "disponibles acá. Vuelve a leer en Tab 2 con un rango más amplio si hace falta."
+        )
+        b1, b2 = st.columns(2)
         with b1:
-            test_phase_periods = st.number_input(
-                "Test Phase Periods (días reservados para prueba)", min_value=1, max_value=730, value=151,
-                help="Ej.: backtest enero-mayo 2025 ≈ 151 días.",
-            )
+            test_start = st.date_input("Test Phase — Desde", value=pd.Timestamp("2025-01-01").date())
         with b2:
-            bt_model_choice = st.selectbox("Modelo", ["auto", "tbats", "seasonal_grey"], key="bt_model")
+            test_end = st.date_input("Test Phase — Hasta", value=pd.Timestamp("2025-05-31").date())
+        if test_start and test_end:
+            st.caption(f"Ventana de test: {(test_end - test_start).days + 1} días. El entrenamiento usa toda la historia cargada ANTES de {test_start}.")
+
+        b3, b4, b5 = st.columns(3)
         with b3:
-            bt_season_length = st.number_input("Largo de estación (Gris Estacional)", min_value=2, max_value=31, value=7, key="bt_season")
+            bt_model_choice = st.selectbox("Modelo", ["auto", "tbats", "seasonal_grey"], key="bt_model")
         with b4:
+            bt_season_length = st.number_input("Largo de estación (Gris Estacional)", min_value=2, max_value=31, value=7, key="bt_season")
+        with b5:
             bt_n_jobs = st.number_input("Procesos en paralelo", min_value=1, max_value=16, value=1, key="bt_njobs")
 
         bt_c5, bt_c6 = st.columns(2)
@@ -410,7 +420,7 @@ with tab_backtest:
         with bt_c6:
             bt_annual = st.checkbox("TBATS: incluir estacionalidad anual (365.25 días)", value=False, key="bt_annual")
 
-        if st.button("Ejecutar Test Phase", type="primary"):
+        if st.button("Ejecutar Test Phase", type="primary", disabled=not (test_start and test_end and test_start <= test_end)):
             bt_cfg = RunConfig(
                 model=bt_model_choice,
                 season_length=int(bt_season_length),
@@ -419,8 +429,8 @@ with tab_backtest:
                 tbats_fast=bt_tbats_fast,
             )
             n_combos = history[["PRDID", "CUSTID", "LOCID"]].drop_duplicates().shape[0]
-            with st.spinner(f"Corriendo Test Phase ({test_phase_periods} días) para {n_combos} combinaciones..."):
-                backtest_summary = run_backtest(history, int(test_phase_periods), bt_cfg)
+            with st.spinner(f"Corriendo Test Phase ({test_start} a {test_end}) para {n_combos} combinaciones..."):
+                backtest_summary = run_backtest(history, test_start, test_end, bt_cfg)
             st.session_state["backtest_summary"] = backtest_summary
 
         backtest_summary = st.session_state["backtest_summary"]

@@ -8,6 +8,14 @@ el Ex-Post (ajuste in-sample) para elegir el mejor algoritmo, porque el
 Ex-Post puede sobreestimar la precisión (overfitting) — el Test Phase da
 una medida honesta, fuera de muestra.
 
+A diferencia del campo de SAP (que cuenta N períodos hacia atrás desde HOY),
+acá el holdout se define con fechas de calendario explícitas
+(``test_start``/``test_end``) — necesario porque la fecha de "hoy" de la
+sesión no tiene por qué coincidir con la ventana de evaluación real que pide
+el cliente (p.ej. un backtest ene-may 2025 evaluado en agosto 2026). Definir
+el holdout como "los últimos N días de lo que se haya cargado" habría atado
+el resultado a cuándo se corre la app, no a la ventana que pide el negocio.
+
 Referencia: SAP KBA 2701226 "Use of 'Test Phase Periods' in IBP Forecasting";
 SAP Community, "Ex-Post forecast or Test Phase? How to determine the best
 forecasting algorithm" (2023).
@@ -43,7 +51,8 @@ class BacktestComboResult:
 @dataclass
 class BacktestSummary:
     results: list[BacktestComboResult] = field(default_factory=list)
-    test_phase_periods: int = 0
+    test_start: pd.Timestamp | None = None
+    test_end: pd.Timestamp | None = None
 
     @property
     def summary_df(self) -> pd.DataFrame:
@@ -109,29 +118,33 @@ def _wmape(actual: np.ndarray, forecast: np.ndarray) -> float | None:
 
 
 def _backtest_one(
-    prdid: str, custid: str, locid: str, series: pd.Series, test_phase_periods: int, cfg: RunConfig,
+    prdid: str, custid: str, locid: str, series: pd.Series,
+    test_start: pd.Timestamp, test_end: pd.Timestamp, cfg: RunConfig,
 ) -> BacktestComboResult:
     series = series.sort_index()
-    if len(series) <= test_phase_periods:
+    train = series[series.index < test_start]
+    test = series[(series.index >= test_start) & (series.index <= test_end)]
+    n_test_days = len(test)
+
+    if train.empty:
+        return BacktestComboResult(
+            prdid, custid, locid, None, None, 0, None, n_test_days, None,
+            error=f"Sin historia disponible antes de {test_start.date()} para entrenar",
+        )
+    if test.empty:
         return BacktestComboResult(
             prdid, custid, locid, None, None, 0, None, 0, None,
-            error=(
-                f"Historia ({len(series)} días) no alcanza para reservar "
-                f"{test_phase_periods} días de Test Phase"
-            ),
+            error=f"Sin datos reconstruidos en la ventana de test ({test_start.date()} a {test_end.date()})",
         )
-
-    train = series.iloc[:-test_phase_periods]
-    test = series.iloc[-test_phase_periods:]
 
     # El modelo se elige y entrena SOLO con lo que se sabría en ese momento (train) --
     # nunca mirando el set de prueba, igual que en un backtest real.
-    train_cfg = replace(cfg, horizon_days=test_phase_periods)
+    train_cfg = replace(cfg, horizon_days=n_test_days)
     fit_result = _fit_one(prdid, custid, locid, train, train_cfg)
 
     if fit_result.error or fit_result.forecast is None:
         return BacktestComboResult(
-            prdid, custid, locid, fit_result.model_used, None, 0, None, len(test), None,
+            prdid, custid, locid, fit_result.model_used, None, 0, None, n_test_days, None,
             error=fit_result.error or "Sin forecast generado sobre el set de entrenamiento",
         )
 
@@ -144,25 +157,34 @@ def _backtest_one(
     detail = pd.DataFrame({"FECHA": test.index, "ACTUAL": actual_arr, "FORECAST": forecast_arr})
 
     return BacktestComboResult(
-        prdid, custid, locid, fit_result.model_used, mape, excluded, wmape, len(test), detail,
+        prdid, custid, locid, fit_result.model_used, mape, excluded, wmape, n_test_days, detail,
     )
 
 
 def run_backtest(
-    history: pd.DataFrame, test_phase_periods: int, cfg: RunConfig, value_col: str = "CANTIDAD",
+    history: pd.DataFrame,
+    test_start: str | pd.Timestamp,
+    test_end: str | pd.Timestamp,
+    cfg: RunConfig,
+    value_col: str = "CANTIDAD",
 ) -> BacktestSummary:
     """Ejecuta el Test Phase (backtest real) sobre un histórico en formato largo.
 
-    Reserva los últimos ``test_phase_periods`` días de cada combinación como set de
-    prueba, entrena solo con el resto, y mide MAPE/WMAPE contra el valor real ya
-    conocido del holdout.
+    El holdout es la ventana de CALENDARIO [``test_start``, ``test_end``] (ambos
+    inclusive) — no "los últimos N días de lo que se haya cargado". El
+    entrenamiento usa toda la historia disponible ANTES de ``test_start``
+    (lo que haya después de ``test_end`` en el histórico cargado se ignora:
+    no es relevante para esta ventana de evaluación).
     """
     required = set(DIM_COLS + ["FECHA", value_col])
     missing = required - set(history.columns)
     if missing:
         raise ValueError(f"Faltan columnas en el histórico: {sorted(missing)}")
-    if test_phase_periods <= 0:
-        raise ValueError(f"test_phase_periods debe ser > 0, recibido {test_phase_periods}")
+
+    test_start = pd.Timestamp(test_start)
+    test_end = pd.Timestamp(test_end)
+    if test_end < test_start:
+        raise ValueError(f"test_end ({test_end.date()}) es anterior a test_start ({test_start.date()})")
 
     groups = list(history.groupby(DIM_COLS, sort=False))
     tasks = []
@@ -172,15 +194,15 @@ def run_backtest(
         tasks.append((prdid, custid, locid, s))
 
     if cfg.n_jobs <= 1:
-        results = [_backtest_one(p, c, l, s, test_phase_periods, cfg) for p, c, l, s in tasks]
+        results = [_backtest_one(p, c, l, s, test_start, test_end, cfg) for p, c, l, s in tasks]
     else:
         results = []
         with ProcessPoolExecutor(max_workers=cfg.n_jobs) as pool:
             futures = {
-                pool.submit(_backtest_one, p, c, l, s, test_phase_periods, cfg): (p, c, l)
+                pool.submit(_backtest_one, p, c, l, s, test_start, test_end, cfg): (p, c, l)
                 for p, c, l, s in tasks
             }
             for fut in as_completed(futures):
                 results.append(fut.result())
 
-    return BacktestSummary(results=results, test_phase_periods=test_phase_periods)
+    return BacktestSummary(results=results, test_start=test_start, test_end=test_end)

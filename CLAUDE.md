@@ -113,18 +113,27 @@ src/
 - **Test Phase Periods (`src/backtest.py`, Tab 4, 2026-08-25)**: terminología
   y mecánica tomadas literal de SAP IBP (campo "Test Phase Periods" en
   Forecasting Steps del Forecast Model — SAP KBA 2701226), NO inventadas.
-  Reserva los últimos N días de cada combo como holdout, entrena SOLO con
-  el resto (`_fit_one` de `forecast_engine.py`, reusado tal cual — la
-  selección de modelo también se decide solo con el train, nunca mirando
-  el test), pronostica a ciegas y compara contra el real ya conocido. SAP
-  recomienda esto por sobre el Ex-Post para elegir el mejor algoritmo
-  (Ex-Post = ajuste in-sample, puede sobreestimar precisión). **MAPE es la
-  métrica oficial pedida por el cliente** (contexto: competencia entre
-  consultores — "gana el menor MAPE" contra un backtest ene-may 2025, ~151
-  días). MAPE excluye días con real=0 del holdout (indefinido, división por
-  cero) — se cuentan aparte en `mape_days_excluded`, nunca se ocultan
-  silenciosamente. WMAPE (`sum|error|/sum|real|`, agregado entre
-  combinaciones) se muestra como respaldo, no reemplaza al MAPE.
+  Entrena SOLO con historia ANTES del holdout (`_fit_one` de
+  `forecast_engine.py`, reusado tal cual — la selección de modelo también
+  se decide solo con el train, nunca mirando el test), pronostica a ciegas
+  y compara contra el real ya conocido. SAP recomienda esto por sobre el
+  Ex-Post para elegir el mejor algoritmo (Ex-Post = ajuste in-sample, puede
+  sobreestimar precisión). **MAPE es la métrica oficial pedida por el
+  cliente** (contexto: competencia entre consultores — "gana el menor
+  MAPE" contra un backtest ene-may 2025, ~151 días). MAPE excluye días con
+  real=0 del holdout (indefinido, división por cero) — se cuentan aparte en
+  `mape_days_excluded`, nunca se ocultan silenciosamente. WMAPE
+  (`sum|error|/sum|real|`, agregado entre combinaciones) se muestra como
+  respaldo, no reemplaza al MAPE.
+  **Fix 2026-08-25 (bug real encontrado por el cliente)**: la primera
+  versión definía el holdout como "los últimos N días de lo que se haya
+  cargado" — eso ataba el resultado a cuándo se corre la app (sesión actual
+  25-08-2026), no a la ventana de calendario que pide el negocio (ene-may
+  2025). `run_backtest(history, test_start, test_end, cfg)` ahora recibe
+  **fechas de calendario explícitas** — train = toda la historia cargada
+  ANTES de `test_start`; lo que haya después de `test_end` se ignora. Tab 4
+  tiene date pickers "Desde"/"Hasta" con default 2025-01-01/2025-05-31
+  (los del ejemplo del cliente) en vez de un campo de cantidad de días.
 
 ---
 ## Key Figures reales del tenant (confirmadas por el cliente)
