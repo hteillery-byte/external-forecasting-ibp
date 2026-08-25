@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.backtest import run_backtest
+from src.combined_view import EX_POST, FORECAST_FUTURO, REAL, TEST_PHASE_FORECAST, build_combined_view
 from src.forecast_engine import RunConfig, run_mass_forecast
 from src.ibp_client import IBPError, IBPKeyFigureClient
 from src.ibp_export import push_to_ibp
@@ -27,12 +28,14 @@ for key, default in {
     "history": None,
     "summary": None,
     "backtest_summary": None,
+    "combined_df": None,
 }.items():
     st.session_state.setdefault(key, default)
 
-tab_conn, tab_hist, tab_fc, tab_backtest, tab_export = st.tabs(
-    ["1 · Conexión IBP", "2 · Histórico", "3 · Pronóstico masivo", "4 · Test Phase (MAPE)", "5 · Exportar a IBP"]
-)
+tab_conn, tab_hist, tab_fc, tab_backtest, tab_combined, tab_export = st.tabs([
+    "1 · Conexión IBP", "2 · Histórico", "3 · Pronóstico masivo",
+    "4 · Test Phase (MAPE)", "5 · Vista combinada", "6 · Exportar a IBP",
+])
 
 # ----------------------------------------------------------------- Tab 1
 with tab_conn:
@@ -476,6 +479,88 @@ with tab_backtest:
                 st.plotly_chart(fig_bt, use_container_width=True)
 
 # ----------------------------------------------------------------- Tab 5
+with tab_combined:
+    st.subheader("Vista combinada — Real, Ex Post, Test Phase y Forecast futuro en una sola línea de tiempo")
+    st.caption(
+        "Encadena: Real histórico + Ex Post (ajuste sobre TODOS los meses de entrenamiento) + "
+        "Test Phase (forecast ciego contra el holdout de calendario) + Forecast futuro puro (sin "
+        "real, proyección desde la fecha de corte). Corre de nuevo el pronóstico y el Test Phase "
+        "con las fechas de acá — no reutiliza lo que hayas corrido en las Tabs 3/4 con otra config."
+    )
+    history = st.session_state["history"]
+    if history is None or history.empty:
+        st.warning("Lee el histórico en la pestaña 2 primero.")
+    else:
+        v1, v2 = st.columns(2)
+        with v1:
+            st.markdown("**Test Phase**")
+            v_test_start = st.date_input("Test Phase — Desde", value=pd.Timestamp("2025-01-01").date(), key="v_test_start")
+            v_test_end = st.date_input("Test Phase — Hasta", value=pd.Timestamp("2025-05-31").date(), key="v_test_end")
+        with v2:
+            st.markdown("**Forecast futuro**")
+            v_forecast_start = st.date_input("Forecast — Desde", value=pd.Timestamp("2026-06-01").date(), key="v_fc_start")
+            v_horizon = st.number_input("Horizonte (días)", min_value=1, max_value=365, value=60, key="v_horizon")
+
+        v3, v4, v5, v6 = st.columns(4)
+        with v3:
+            v_model = st.selectbox("Modelo", ["auto", "tbats", "seasonal_grey"], key="v_model")
+        with v4:
+            v_season = st.number_input("Largo de estación (Gris Estacional)", min_value=2, max_value=31, value=7, key="v_season")
+        with v5:
+            v_njobs = st.number_input("Procesos en paralelo", min_value=1, max_value=16, value=1, key="v_njobs")
+        with v6:
+            v_annual = st.checkbox("TBATS: estacionalidad anual", value=False, key="v_annual")
+        v_fast = st.checkbox("TBATS modo rápido", value=True, key="v_fast")
+
+        if st.button("Generar vista combinada", type="primary"):
+            forecast_start_ts = pd.Timestamp(v_forecast_start)
+            training_history = history[history["FECHA"] < forecast_start_ts]
+            v_cfg = RunConfig(
+                model=v_model,
+                horizon_days=int(v_horizon),
+                season_length=int(v_season),
+                seasonal_periods_tbats=(7, 365.25) if v_annual else (7,),
+                n_jobs=int(v_njobs),
+                tbats_fast=v_fast,
+            )
+            if training_history.empty:
+                st.error(f"No hay histórico cargado antes de {v_forecast_start} — no se puede entrenar.")
+            else:
+                with st.spinner("Corriendo Ex Post + Forecast futuro sobre el set de entrenamiento..."):
+                    mass_summary = run_mass_forecast(training_history, v_cfg)
+                with st.spinner("Corriendo Test Phase..."):
+                    backtest_summary = run_backtest(history, v_test_start, v_test_end, v_cfg)
+                st.session_state["combined_df"] = build_combined_view(training_history, mass_summary, backtest_summary)
+
+        combined_df = st.session_state["combined_df"]
+        if combined_df is not None and not combined_df.empty:
+            combos = sorted(set(zip(combined_df.PRDID, combined_df.CUSTID, combined_df.LOCID)))
+            sel = st.selectbox("Ver combinación", combos, format_func=lambda t: " / ".join(t), key="v_sel")
+            prdid, custid, locid = sel
+            d = combined_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid").sort_values("FECHA")
+
+            fig_v = go.Figure()
+            style = {
+                REAL: dict(name="Real histórico", mode="lines", line=dict(color="#4C78A8")),
+                EX_POST: dict(name="Ex Post (ajuste entrenamiento)", mode="lines", line=dict(color="#72B7B2", dash="dot")),
+                TEST_PHASE_FORECAST: dict(name="Test Phase (forecast ciego)", mode="lines+markers", line=dict(color="#E45756")),
+                FORECAST_FUTURO: dict(name="Forecast futuro", mode="lines", line=dict(color="#F58518")),
+            }
+            for segmento, kwargs in style.items():
+                sub = d[d["SEGMENTO"] == segmento]
+                if not sub.empty:
+                    fig_v.add_trace(go.Scatter(x=sub.FECHA, y=sub.VALOR, **kwargs))
+            fig_v.update_layout(height=450, margin=dict(l=10, r=10, t=30, b=10))
+            st.plotly_chart(fig_v, use_container_width=True)
+
+            st.download_button(
+                "Descargar vista combinada (CSV, todas las combinaciones)",
+                combined_df.to_csv(index=False).encode("utf-8"),
+                file_name="vista_combinada.csv",
+                mime="text/csv",
+            )
+
+# ----------------------------------------------------------------- Tab 6
 with tab_export:
     st.subheader("Escribir Forecast y Ex Post en SAP IBP")
     client = st.session_state["client"]

@@ -29,13 +29,14 @@ directo).
 ## Estructura
 
 ```
-app.py                     # Streamlit — 5 tabs: conexión / histórico / pronóstico / Test Phase (MAPE) / export
+app.py                     # Streamlit — 6 tabs: conexión / histórico / pronóstico / Test Phase (MAPE) / vista combinada / export
 src/
 ├── ibp_client.py          # IBPKeyFigureClient: read_key_figure, write_key_figures (CSRF + poll)
 ├── ibp_read.py             # read_history() → DataFrame largo (PRDID,CUSTID,LOCID,FECHA,CANTIDAD)
 ├── ibp_export.py           # build_write_rows() / push_to_ibp()
 ├── forecast_engine.py      # run_mass_forecast() — agrupa por combo, auto-selecciona modelo
 ├── backtest.py             # run_backtest() — Test Phase Periods (holdout real, MAPE/WMAPE)
+├── combined_view.py        # build_combined_view() — encadena REAL+EX_POST+TEST_PHASE_FORECAST+FORECAST_FUTURO
 ├── period_format.py        # add_period_label_column() — formato IBP ("MAR 2026") para tablas/gráficos
 └── models/
     ├── tbats_model.py       # fit_and_forecast() — MIN_OBS_FOR_TBATS=21
@@ -134,6 +135,19 @@ src/
   ANTES de `test_start`; lo que haya después de `test_end` se ignora. Tab 4
   tiene date pickers "Desde"/"Hasta" con default 2025-01-01/2025-05-31
   (los del ejemplo del cliente) en vez de un campo de cantidad de días.
+- **Vista combinada (`src/combined_view.py`, Tab 5, 2026-08-25)**: encadena
+  en una sola línea de tiempo por combinación REAL → EX_POST (ajuste sobre
+  TODOS los meses de entrenamiento, no solo un tramo) → TEST_PHASE_FORECAST
+  (el mismo holdout ene-may 2025 de Tab 4) → FORECAST_FUTURO (proyección
+  pura, sin real). No reimplementa modelos — solo junta en formato largo
+  (PRDID,CUSTID,LOCID,FECHA,SEGMENTO,VALOR) lo que ya producen
+  `run_mass_forecast` (Ex Post + Forecast, corrido sobre el histórico
+  filtrado a ANTES de la fecha de corte del forecast) y `run_backtest`.
+  **Fecha de corte del forecast futuro: 1/06/2026, fija a propósito** — el
+  cliente confirmó explícitamente que es una fecha fija para resolver el
+  caso puntual actual (no relativa a "hoy"), aunque ya haya pasado respecto
+  a la fecha real de la sesión. Escalabilidad/generalización a "hoy
+  dinámico" queda pendiente, no pedida todavía.
 
 ---
 ## Key Figures reales del tenant (confirmadas por el cliente)

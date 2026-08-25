@@ -12,13 +12,14 @@ Modelos matemáticos de forecasting para complementar SAP IBP Advanced Demand.
 ## Arquitectura
 
 ```
-app.py                     # UI Streamlit — 5 pasos: conexión, histórico, pronóstico, Test Phase (MAPE), export
+app.py                     # UI Streamlit — 6 pasos: conexión, histórico, pronóstico, Test Phase (MAPE), vista combinada, export
 src/
 ├── ibp_client.py          # Cliente OData v2 IBP — lectura + escritura de Key Figures
 ├── ibp_read.py            # Lee histórico diario y lo normaliza a formato largo
 ├── ibp_export.py          # Traduce resultados del engine al payload de escritura IBP
 ├── forecast_engine.py     # Orquestador masivo: agrupa por combo, elige modelo, corre en paralelo
 ├── backtest.py            # Test Phase Periods (holdout real, MAPE/WMAPE) — terminología SAP IBP
+├── combined_view.py       # Encadena Real + Ex Post + Test Phase + Forecast futuro en una línea de tiempo
 ├── period_format.py       # Formato de período estilo IBP ("MAR 2026") para tablas/gráficos
 └── models/
     ├── tbats_model.py     # TBATS (paquete `tbats`) — corto plazo / día
@@ -49,12 +50,19 @@ streamlit run app.py
 3. **Pronóstico masivo** — modelo (`auto` según densidad de observaciones
    reales, ver tabla abajo), horizonte en días, largo de estación, y opción
    de estacionalidad anual en TBATS (ver caveat de rendimiento en `CLAUDE.md`).
-4. **Test Phase (MAPE)** — backtest real: reserva los últimos N días como
-   holdout, entrena solo con el resto, pronostica a ciegas y mide MAPE/WMAPE
-   contra la venta real ya conocida. Mismo concepto que "Test Phase Periods"
-   de SAP IBP (Forecast Model → Forecasting Steps) — recomendado por SAP por
-   sobre el Ex-Post para elegir el mejor algoritmo.
-5. **Exportar a IBP** — nombres de las Key Figures destino (Forecast y Ex
+4. **Test Phase (MAPE)** — backtest real: reserva una ventana de calendario
+   (Desde/Hasta) como holdout, entrena solo con la historia anterior,
+   pronostica a ciegas y mide MAPE/WMAPE contra la venta real ya conocida.
+   Mismo concepto que "Test Phase Periods" de SAP IBP (Forecast Model →
+   Forecasting Steps) — recomendado por SAP por sobre el Ex-Post para
+   elegir el mejor algoritmo. El holdout es de fechas de calendario fijas,
+   no depende de cuándo se corra la app.
+5. **Vista combinada** — encadena en una sola línea de tiempo por
+   combinación: Real histórico → Ex Post (ajuste sobre todos los meses de
+   entrenamiento) → Test Phase (forecast ciego del holdout) → Forecast
+   futuro puro (proyección desde una fecha de corte, sin real). Exporta
+   todo a un único CSV largo (columna `SEGMENTO`).
+6. **Exportar a IBP** — nombres de las Key Figures destino (Forecast y Ex
    Post) y escribe ambas vía `SAP_COM_0720` en lotes, con polling de estado.
 
 ## Selección de modelo
