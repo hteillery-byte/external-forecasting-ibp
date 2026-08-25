@@ -1,4 +1,4 @@
-# SMU Forecast — External Forecasting IBP
+#Forecast — External Forecasting IBP
 
 Pronóstico de demanda diaria y Ex Post a nivel masivo (por combinación
 PRDID × CUSTID × LOCID), usando **TBATS** (corto plazo, multi-estacionalidad)
