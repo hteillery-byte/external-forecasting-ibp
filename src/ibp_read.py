@@ -2,11 +2,29 @@
 (PRDID, CUSTID, LOCID, FECHA, CANTIDAD) que consume forecast_engine."""
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 from src.ibp_client import IBPKeyFigureClient
 
 DIM_COLS = ["PRDID", "CUSTID", "LOCID"]
+
+# SAP Gateway OData v2 serializa fechas en JSON como "/Date(1735689600000)/"
+# (ms epoch), no como ISO 8601 — pandas.to_datetime no lo reconoce directo.
+_SAP_DATE_RE = re.compile(r"/Date\((-?\d+)\)/")
+
+
+def _parse_ibp_datetime(series: pd.Series) -> pd.Series:
+    as_str = series.astype(str)
+    ms = as_str.str.extract(_SAP_DATE_RE, expand=False)
+    parsed = pd.to_datetime(ms.astype("Int64"), unit="ms", errors="coerce")
+
+    missing = parsed.isna()
+    if missing.any():
+        # Fallback para tenants/servicios que sí devuelven ISO 8601 directo.
+        parsed.loc[missing] = pd.to_datetime(as_str.loc[missing], errors="coerce")
+    return parsed
 
 
 def read_history(
@@ -22,7 +40,9 @@ def read_history(
         return pd.DataFrame(columns=DIM_COLS + ["FECHA", "CANTIDAD"])
 
     out = raw.rename(columns={period_field: "FECHA", kf_name: "CANTIDAD"})
-    out["FECHA"] = pd.to_datetime(out["FECHA"]).dt.tz_localize(None)
+    out["FECHA"] = _parse_ibp_datetime(out["FECHA"])
+    if out["FECHA"].dt.tz is not None:
+        out["FECHA"] = out["FECHA"].dt.tz_localize(None)
     out["CANTIDAD"] = pd.to_numeric(out["CANTIDAD"], errors="coerce").fillna(0.0)
     for c in DIM_COLS:
         out[c] = out[c].astype(str)
