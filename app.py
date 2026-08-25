@@ -73,19 +73,17 @@ with tab_conn:
         if discovered:
             match = pa_typed in discovered
             (st.success if match else st.error)(
-                f"Planning Areas detectadas por IBP: {discovered}"
+                f"Planning Areas detectadas por IBP (entity sets con hermano `{{nombre}}Trans`): {discovered}"
                 + ("" if match else f" — **`{pa_typed}` no está en esa lista, revisa mayúsculas/nombre exacto**.")
             )
         else:
             st.warning(
-                "IBP no devolvió ninguna Planning Area en `PlanningAreaSet` — no se pudo validar que "
-                f"`{pa_typed}` sea un nombre técnico correcto. Si la lectura en Tab 2 da 404 "
-                "'Resource not found for the segment', ese es probablemente el motivo: el ID escrito "
-                "no calza exactamente con el nombre real de la Planning Area en el tenant."
+                f"No se detectó ningún entity set con el patrón `{{nombre}}Trans` que confirme "
+                f"`{pa_typed}` como Planning Area válida."
             )
-            if conn_result.get("raw_sample"):
-                st.caption("`PlanningAreaSet` sí devolvió filas, pero con campos no reconocidos. Fila cruda:")
-                st.json(conn_result["raw_sample"])
+
+        with st.expander("Ver todos los entity sets crudos devueltos por el servicio (diagnóstico)"):
+            st.write(conn_result.get("all_entity_sets") or "(sin datos)")
 
 # ----------------------------------------------------------------- Tab 2
 with tab_hist:

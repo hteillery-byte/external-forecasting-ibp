@@ -76,57 +76,50 @@ class IBPKeyFigureClient:
 
     # ---------------------------------------------------------------- read
 
+    def _service_document_entity_sets(self, svc: str) -> list[str] | None:
+        """GET del documento de servicio (raíz) — lista TODOS los entity sets reales,
+        sin asumir un nombre fijo como 'PlanningAreaSet' (que no existe en todas las
+        versiones/tenants de PLANNING_DATA_API_SRV)."""
+        r = self._session.get(
+            f"{self._base(svc)}/",
+            params={"$format": "json"},
+            auth=self._auth,
+            headers={"Accept": "application/json"},
+            timeout=self.timeout,
+            verify=self.verify_ssl,
+        )
+        if not r.ok:
+            raise IBPError(f"HTTP {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        raw = data.get("d", {}).get("EntitySets") or data.get("EntitySets") or []
+        return [es if isinstance(es, str) else (es.get("name") or es.get("EntitySetName") or "") for es in raw]
+
     def test_connection(self) -> dict[str, Any]:
-        """Prueba conectividad y lista Planning Areas visibles (0720 primario, 0143 fallback)."""
-        try:
-            r = self._session.get(
-                f"{self._base(PLANNING_SVC)}/PlanningAreaSet",
-                params={"$format": "json"},
-                auth=self._auth,
-                headers={"Accept": "application/json"},
-                timeout=self.timeout,
-                verify=self.verify_ssl,
-            )
-            if r.ok:
-                results = r.json().get("d", {}).get("results", [])
-                pas = [
-                    row.get("PlanningAreaId") or row.get("PlanningArea") or row.get("PLANNINGAREAID")
-                    for row in results
-                ]
-                pas = [p for p in pas if p]
-                out = {"ok": True, "service": "SAP_COM_0720", "planning_areas": pas}
-                if results and not pas:
-                    # El campo con el ID no calzó con ninguno de los nombres esperados —
-                    # se adjunta la fila cruda para diagnosticar el esquema real del tenant.
-                    out["raw_sample"] = results[0]
-                return out
-        except requests.RequestException as exc:
-            last_err: Exception | str = exc
-        else:
-            last_err = f"HTTP {r.status_code}: {r.text[:300]}"
+        """Prueba conectividad y lista Planning Areas visibles (0720 primario, 0143 fallback).
 
-        # Guardamos por qué falló SAP_COM_0720 aunque el fallback a 0143 funcione —
-        # si no, el fallback "tapa" un problema real de autorización en el arrangement primario.
-        svc0720_error = str(last_err)
+        No asume un entity set fijo tipo 'PlanningAreaSet' — pide el documento de
+        servicio (raíz) de cada API y detecta Planning Areas reales como los
+        entity sets que tienen un hermano '{nombre}Trans' (convención confirmada:
+        cada PA expone {PA}, {PA}Trans, {PA}Message).
+        """
+        try:
+            entity_sets = self._service_document_entity_sets(PLANNING_SVC)
+            names = set(entity_sets)
+            planning_areas = sorted(n for n in names if f"{n}Trans" in names)
+            return {"ok": True, "service": "SAP_COM_0720", "planning_areas": planning_areas, "all_entity_sets": entity_sets}
+        except (requests.RequestException, IBPError) as exc:
+            svc0720_error = str(exc)
 
         try:
-            r = self._session.get(
-                f"{self._base(EXTRACT_SVC)}/",
-                params={"$format": "json"},
-                auth=self._auth,
-                headers={"Accept": "application/json"},
-                timeout=self.timeout,
-                verify=self.verify_ssl,
-            )
-            if r.ok:
-                return {
-                    "ok": True, "service": "SAP_COM_0143", "planning_areas": [],
-                    "svc0720_error": svc0720_error,
-                }
-            last_err = f"HTTP {r.status_code}: {r.text[:300]}"
-        except requests.RequestException as exc:
-            last_err = exc
-        return {"ok": False, "service": None, "planning_areas": [], "error": str(last_err)}
+            entity_sets = self._service_document_entity_sets(EXTRACT_SVC)
+            names = set(entity_sets)
+            planning_areas = sorted(n for n in names if f"{n}Trans" in names)
+            return {
+                "ok": True, "service": "SAP_COM_0143", "planning_areas": planning_areas,
+                "all_entity_sets": entity_sets, "svc0720_error": svc0720_error,
+            }
+        except (requests.RequestException, IBPError) as exc:
+            return {"ok": False, "service": None, "planning_areas": [], "error": f"{svc0720_error} | {exc}"}
 
     def read_key_figure(
         self,
