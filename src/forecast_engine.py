@@ -28,9 +28,13 @@ class RunConfig:
     model: ModelChoice = "auto"
     horizon_days: int = 14
     season_length: int = 7
-    seasonal_periods_tbats: tuple = (7,)
+    seasonal_periods_tbats: tuple = tbats_model.DEFAULT_SEASONAL_PERIODS
     min_obs_tbats: int = tbats_model.MIN_OBS_FOR_TBATS
     min_obs_grey: int = seasonal_grey.MIN_OBS_FOR_GM11
+    # Piso de densidad para clasificar como demanda intermitente en vez de enrutar a
+    # TBATS solo por tener suficientes DÍAS de calendario — heurística, no un umbral
+    # académico validado contra los datos reales del cliente (ajustar si hace falta).
+    min_nonzero_ratio: float = 0.15
     n_jobs: int = 1
     tbats_fast: bool = True  # ver tbats_model.fit_and_forecast — False solo para análisis puntual
 
@@ -90,18 +94,35 @@ def _stack(results: list[ComboResult], attr: str) -> pd.DataFrame:
 def _fit_one(prdid: str, custid: str, locid: str, series: pd.Series, cfg: RunConfig) -> ComboResult:
     series = series.sort_index()
     n = len(series)
+    # nnz = observaciones REALES (no-cero). El largo del período (n) no basta para decidir
+    # si hay señal suficiente: una combinación con 3 ventas dispersas en 540 días reconstruidos
+    # tiene n=540 pero nnz=3 — no es una serie con historia sólida, es demanda intermitente.
+    nnz = int((series != 0).sum())
+    nnz_ratio = (nnz / n) if n else 0.0
+
     model = cfg.model
     if model == "auto":
-        model = "tbats" if n >= cfg.min_obs_tbats else "seasonal_grey"
+        if nnz >= cfg.min_obs_tbats and nnz_ratio >= cfg.min_nonzero_ratio:
+            model = "tbats"
+        elif nnz >= cfg.min_obs_grey:
+            model = "seasonal_grey"
+        else:
+            msg = (
+                f"{nnz} observaciones no-cero en {n} días ({nnz_ratio:.0%}) — demanda intermitente, "
+                "ya cubierta por Croston/Croston TSB nativo en IBP Advanced Demand (fuera de alcance "
+                "de TBATS/Gris Estacional)."
+            )
+            logger.info("Combo %s/%s/%s: %s", prdid, custid, locid, msg)
+            return ComboResult(prdid, custid, locid, "intermitente", None, None, error=msg)
 
     try:
         if model == "tbats":
-            if n < cfg.min_obs_tbats:
-                raise ValueError(f"TBATS requiere >= {cfg.min_obs_tbats} obs, serie tiene {n}")
+            if nnz < cfg.min_obs_tbats:
+                raise ValueError(f"TBATS requiere >= {cfg.min_obs_tbats} obs NO-CERO, la serie tiene {nnz} (en {n} días)")
             res = tbats_model.fit_and_forecast(series, cfg.horizon_days, cfg.seasonal_periods_tbats, cfg.tbats_fast)
         else:
-            if n < cfg.min_obs_grey:
-                raise ValueError(f"Gris Estacional requiere >= {cfg.min_obs_grey} obs, serie tiene {n}")
+            if nnz < cfg.min_obs_grey:
+                raise ValueError(f"Gris Estacional requiere >= {cfg.min_obs_grey} obs NO-CERO, la serie tiene {nnz}")
             res = seasonal_grey.fit_and_forecast(series, cfg.horizon_days, cfg.season_length)
         return ComboResult(prdid, custid, locid, model, res.ex_post, res.forecast)
     except Exception as exc:  # noqa: BLE001 — aislar fallas por combinación sin abortar el batch

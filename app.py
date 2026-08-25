@@ -231,7 +231,11 @@ with tab_fc:
             model_choice = st.selectbox(
                 "Modelo",
                 ["auto", "tbats", "seasonal_grey"],
-                help="auto: TBATS si hay historia suficiente (>=21 días), si no, Gris Estacional.",
+                help=(
+                    "auto: TBATS si hay >=21 observaciones NO-CERO con densidad razonable (>=15% de "
+                    "los días), Gris Estacional si hay poca historia, o se omite como demanda "
+                    "intermitente (ya cubierta por Croston nativo de IBP) si ninguna aplica."
+                ),
             )
         with c2:
             horizon_days = st.number_input("Horizonte de pronóstico (días)", min_value=1, max_value=365, value=14)
@@ -240,21 +244,38 @@ with tab_fc:
         with c4:
             n_jobs = st.number_input("Procesos en paralelo", min_value=1, max_value=16, value=1)
 
-        tbats_fast = st.checkbox(
-            "TBATS modo rápido (recomendado a nivel masivo)",
-            value=True,
-            help=(
-                "Fija la forma del modelo (sin Box-Cox, tendencia no amortiguada, sin ARMA) en vez de "
-                "hacer grid search completo. Sin esto, cada combinación puede tardar 1-2+ minutos y no "
-                "escala a miles de combinaciones. Desactivar solo para analizar una combinación puntual."
-            ),
-        )
+        c5, c6 = st.columns(2)
+        with c5:
+            tbats_fast = st.checkbox(
+                "TBATS modo rápido (recomendado a nivel masivo)",
+                value=True,
+                help=(
+                    "Fija la forma del modelo (sin Box-Cox, tendencia no amortiguada, sin ARMA) en vez de "
+                    "hacer grid search completo. Sin esto, cada combinación puede tardar 1-2+ minutos y no "
+                    "escala a miles de combinaciones. Desactivar solo para analizar una combinación puntual."
+                ),
+            )
+        with c6:
+            annual_seasonality = st.checkbox(
+                "TBATS: incluir estacionalidad anual (365.25 días)",
+                value=False,
+                help=(
+                    "Requiere >= ~2 años de historia por combinación para activarse (si no hay "
+                    "suficiente, se ignora sola y queda solo semanal). Medido con modo rápido sobre "
+                    "una serie de 3 años: ~4.2s/combinación solo semanal vs. ~15.9s/combinación con "
+                    "anual (~3.8x más lento). A 150.000 combinaciones eso es la diferencia entre horas "
+                    "y semanas de cómputo — actívalo solo si de verdad necesitas que TBATS capture "
+                    "Navidad/temporadas en vez de dejarlo para los modelos de mediano/largo plazo."
+                ),
+            )
 
         if st.button("Ejecutar pronóstico masivo", type="primary"):
+            seasonal_periods = (7, 365.25) if annual_seasonality else (7,)
             cfg = RunConfig(
                 model=model_choice,
                 horizon_days=int(horizon_days),
                 season_length=int(season_length),
+                seasonal_periods_tbats=seasonal_periods,
                 n_jobs=int(n_jobs),
                 tbats_fast=tbats_fast,
             )
@@ -277,6 +298,27 @@ with tab_fc:
             if not summary.errors_df.empty:
                 with st.expander(f"Ver {len(summary.errors_df)} combinaciones con error"):
                     st.dataframe(summary.errors_df, use_container_width=True)
+
+            st.markdown("### Descargar resultados (CSV)")
+            st.caption(
+                "Útil para revisar el pronóstico antes de escribirlo en IBP (Tab 4), o para correr "
+                "el modelo varias veces con distintos parámetros y comparar los CSV entre sí."
+            )
+            dcol1, dcol2 = st.columns(2)
+            with dcol1:
+                st.download_button(
+                    "Descargar Ex Post (CSV)",
+                    summary.ex_post_df.to_csv(index=False).encode("utf-8"),
+                    file_name="ex_post.csv",
+                    mime="text/csv",
+                )
+            with dcol2:
+                st.download_button(
+                    "Descargar Forecast (CSV)",
+                    summary.forecast_df.to_csv(index=False).encode("utf-8"),
+                    file_name="forecast.csv",
+                    mime="text/csv",
+                )
 
             combos = sorted(set(zip(summary.ex_post_df.PRDID, summary.ex_post_df.CUSTID, summary.ex_post_df.LOCID)))
             if combos:

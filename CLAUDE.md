@@ -62,9 +62,28 @@ src/
   No asumir nunca sin probar con un rango de fechas chico primero. La
   granularidad real se infiere de los datos (`src/period_format.py
   infer_period_granularity`), no del nombre de columna.
-- **Selección de modelo `auto`**: TBATS si la serie tiene ≥21 observaciones
-  (~3 ciclos semanales), si no, Gris Estacional (funciona desde 4 obs). Motor
-  en `forecast_engine._fit_one`.
+- **Selección de modelo `auto` (fix 2026-08-25)**: enruta por observaciones
+  NO-CERO (`nnz`), no por largo del período (`n`) — un combo con 3 ventas
+  reales dispersas en 540 días reconstruidos tiene `n=540` pero `nnz=3`, y
+  antes del fix eso calificaba para TBATS solo por longitud. Ahora: TBATS si
+  `nnz >= min_obs_tbats` (21) Y `nnz/n >= min_nonzero_ratio` (0.15,
+  heurística sin validar aún contra datos reales del cliente) → si no,
+  Gris Estacional si `nnz >= min_obs_grey` (4) → si no, se marca
+  `model_used="intermitente"` y se omite (demanda intermitente ya cubierta
+  por Croston/Croston TSB nativo de IBP Advanced Demand, fuera de alcance
+  por diseño — ver slide 4 de la presentación de contexto). Motor en
+  `forecast_engine._fit_one`.
+- **TBATS con estacionalidad anual (365.25 días)**: opt-in vía checkbox en
+  Tab 3 (`annual_seasonality`), default **desactivado**. Medido con modo
+  rápido sobre una serie sintética de 3 años: **~4.2s/combinación solo
+  semanal vs. ~15.9s/combinación con anual (~3.8x más lento)**. A 150.000
+  combinaciones (3.000 SKU × 50 tiendas, caso real del cliente) esa
+  diferencia es horas vs. semanas de cómputo — no activar por defecto sin
+  que el cliente confirme que necesita que TBATS capture estacionalidad
+  anual explícitamente (la presentación original scopea TBATS a "día de
+  semana + patrón mensual", la anual quedaría mejor en los modelos de
+  mediano/largo plazo). Requiere además >= ~2 años de historia por combo
+  para activarse — si no hay suficiente, se ignora sola.
 - **Lectura excluye valores 0/vacío por defecto** (`{kf} gt 0` en el
   `$filter`, checkbox en Tab 2, activado por defecto): IBP devuelve una fila
   por cada combinación × período aunque el valor sea 0, lo que infla mucho
