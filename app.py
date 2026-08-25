@@ -35,6 +35,30 @@ def make_progress_callback(progress_bar, progress_text):
     return _on_progress
 
 
+def tbats_param_controls(key_prefix: str):
+    """Los 3 componentes opcionales de TBATS, expuestos por separado (no un
+    solo "modo rápido" que los agrupa a ciegas). Costo medido con una serie
+    sintética de 3 años, período semanal, ~4s/combo con los 3 apagados
+    (ver CLAUDE.md y src/models/tbats_model.py para el detalle)."""
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        use_box_cox = st.checkbox(
+            "Box-Cox", value=False, key=f"{key_prefix}_boxcox",
+            help="Estabiliza varianza si la dispersión crece con el nivel. Costo ~1.6x (~6.4s/combo). Beneficio bajo salvo demanda muy heteroscedástica.",
+        )
+    with c2:
+        use_damped_trend = st.checkbox(
+            "Tendencia amortiguada", value=True, key=f"{key_prefix}_damped",
+            help="Evita que la tendencia se extrapole sin freno en horizontes largos. Costo ~2.4x (~9.7s/combo). Recomendado activo para horizontes de varias semanas (como los 60 días de este proyecto).",
+        )
+    with c3:
+        use_arma_errors = st.checkbox(
+            "Errores ARMA", value=False, key=f"{key_prefix}_arma",
+            help="Modela autocorrelación residual -- ayuda más a precisión de 1 paso que a un forecast de semanas. Costo ~8x (~32s/combo), el más caro de los tres por lejos. Dejar apagado a nivel masivo.",
+        )
+    return use_box_cox, use_damped_trend, use_arma_errors
+
+
 st.set_page_config(page_title="External Forecasting IBP", layout="wide")
 st.title("External Forecasting IBP — TBATS y Modelo Gris Estacional")
 st.caption(
@@ -295,30 +319,20 @@ with tab_fc:
         with c4:
             n_jobs = st.number_input("Procesos en paralelo", min_value=1, max_value=16, value=1)
 
-        c5, c6 = st.columns(2)
-        with c5:
-            tbats_fast = st.checkbox(
-                "TBATS modo rápido (recomendado a nivel masivo)",
-                value=True,
-                help=(
-                    "Fija la forma del modelo (sin Box-Cox, tendencia no amortiguada, sin ARMA) en vez de "
-                    "hacer grid search completo. Sin esto, cada combinación puede tardar 1-2+ minutos y no "
-                    "escala a miles de combinaciones. Desactivar solo para analizar una combinación puntual."
-                ),
-            )
-        with c6:
-            annual_seasonality = st.checkbox(
-                "TBATS: incluir estacionalidad anual (365.25 días)",
-                value=False,
-                help=(
-                    "Requiere >= ~2 años de historia por combinación para activarse (si no hay "
-                    "suficiente, se ignora sola y queda solo semanal). Medido con modo rápido sobre "
-                    "una serie de 3 años: ~4.2s/combinación solo semanal vs. ~15.9s/combinación con "
-                    "anual (~3.8x más lento). A 150.000 combinaciones eso es la diferencia entre horas "
-                    "y semanas de cómputo — actívalo solo si de verdad necesitas que TBATS capture "
-                    "Navidad/temporadas en vez de dejarlo para los modelos de mediano/largo plazo."
-                ),
-            )
+        st.markdown("**Parámetros de TBATS** (cada uno expuesto por separado — ver costo/beneficio en el `?`)")
+        use_box_cox, use_damped_trend, use_arma_errors = tbats_param_controls("fc")
+        annual_seasonality = st.checkbox(
+            "TBATS: incluir estacionalidad anual (365.25 días)",
+            value=False,
+            help=(
+                "Requiere >= ~2 años de historia por combinación para activarse (si no hay "
+                "suficiente, se ignora sola y queda solo semanal). Medido con los 3 parámetros de "
+                "arriba apagados sobre una serie de 3 años: ~4.2s/combinación solo semanal vs. "
+                "~15.9s/combinación con anual (~3.8x más lento). A escala eso es la diferencia entre "
+                "horas y semanas de cómputo — actívalo solo si de verdad necesitas que TBATS capture "
+                "Navidad/temporadas en vez de dejarlo para los modelos de mediano/largo plazo."
+            ),
+        )
 
         if st.button("Ejecutar pronóstico masivo", type="primary"):
             seasonal_periods = (7, 365.25) if annual_seasonality else (7,)
@@ -328,7 +342,9 @@ with tab_fc:
                 season_length=int(season_length),
                 seasonal_periods_tbats=seasonal_periods,
                 n_jobs=int(n_jobs),
-                tbats_fast=tbats_fast,
+                tbats_use_box_cox=use_box_cox,
+                tbats_use_damped_trend=use_damped_trend,
+                tbats_use_arma_errors=use_arma_errors,
             )
             progress_bar = st.progress(0.0)
             progress_text = st.empty()
@@ -378,9 +394,9 @@ with tab_fc:
             if combos:
                 sel = st.selectbox("Ver detalle de una combinación", combos, format_func=lambda t: " / ".join(t))
                 prdid, custid, locid = sel
-                actual = history[(history.PRDID == prdid) & (history.CUSTID == custid) & (history.LOCID == locid)]
-                ex_post = summary.ex_post_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid")
-                fcst = summary.forecast_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid")
+                actual = history[(history.PRDID == prdid) & (history.CUSTID == custid) & (history.LOCID == locid)].sort_values("FECHA")
+                ex_post = summary.ex_post_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid").sort_values("FECHA")
+                fcst = summary.forecast_df.query("PRDID == @prdid and CUSTID == @custid and LOCID == @locid").sort_values("FECHA")
 
                 all_dates = pd.concat([actual.FECHA, ex_post.FECHA, fcst.FECHA])
                 granularity = infer_period_granularity(all_dates) if not all_dates.empty else "day"
@@ -440,11 +456,8 @@ with tab_backtest:
         with b5:
             bt_n_jobs = st.number_input("Procesos en paralelo", min_value=1, max_value=16, value=1, key="bt_njobs")
 
-        bt_c5, bt_c6 = st.columns(2)
-        with bt_c5:
-            bt_tbats_fast = st.checkbox("TBATS modo rápido", value=True, key="bt_fast")
-        with bt_c6:
-            bt_annual = st.checkbox("TBATS: incluir estacionalidad anual (365.25 días)", value=False, key="bt_annual")
+        bt_use_box_cox, bt_use_damped_trend, bt_use_arma_errors = tbats_param_controls("bt")
+        bt_annual = st.checkbox("TBATS: incluir estacionalidad anual (365.25 días)", value=False, key="bt_annual")
 
         if st.button("Ejecutar Test Phase", type="primary", disabled=not (test_start and test_end and test_start <= test_end)):
             bt_cfg = RunConfig(
@@ -452,7 +465,9 @@ with tab_backtest:
                 season_length=int(bt_season_length),
                 seasonal_periods_tbats=(7, 365.25) if bt_annual else (7,),
                 n_jobs=int(bt_n_jobs),
-                tbats_fast=bt_tbats_fast,
+                tbats_use_box_cox=bt_use_box_cox,
+                tbats_use_damped_trend=bt_use_damped_trend,
+                tbats_use_arma_errors=bt_use_arma_errors,
             )
             progress_bar = st.progress(0.0)
             progress_text = st.empty()
@@ -499,7 +514,7 @@ with tab_backtest:
                 prdid, custid, locid = sel
                 detail = backtest_summary.detail_df.query(
                     "PRDID == @prdid and CUSTID == @custid and LOCID == @locid"
-                )
+                ).sort_values("FECHA")
                 fig_bt = go.Figure()
                 fig_bt.add_trace(go.Scatter(x=detail.FECHA, y=detail.ACTUAL, name="Real (holdout)", mode="lines+markers"))
                 fig_bt.add_trace(go.Scatter(x=detail.FECHA, y=detail.FORECAST, name="Forecast (a ciegas)", mode="lines+markers"))
@@ -538,7 +553,7 @@ with tab_combined:
             v_njobs = st.number_input("Procesos en paralelo", min_value=1, max_value=16, value=1, key="v_njobs")
         with v6:
             v_annual = st.checkbox("TBATS: estacionalidad anual", value=False, key="v_annual")
-        v_fast = st.checkbox("TBATS modo rápido", value=True, key="v_fast")
+        v_use_box_cox, v_use_damped_trend, v_use_arma_errors = tbats_param_controls("v")
 
         if st.button("Generar vista combinada", type="primary"):
             forecast_start_ts = pd.Timestamp(v_forecast_start)
@@ -549,7 +564,9 @@ with tab_combined:
                 season_length=int(v_season),
                 seasonal_periods_tbats=(7, 365.25) if v_annual else (7,),
                 n_jobs=int(v_njobs),
-                tbats_fast=v_fast,
+                tbats_use_box_cox=v_use_box_cox,
+                tbats_use_damped_trend=v_use_damped_trend,
+                tbats_use_arma_errors=v_use_arma_errors,
             )
             if training_history.empty:
                 st.error(f"No hay histórico cargado antes de {v_forecast_start} — no se puede entrenar.")

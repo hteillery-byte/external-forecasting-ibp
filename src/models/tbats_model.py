@@ -28,7 +28,9 @@ def fit_and_forecast(
     y: pd.Series,
     horizon_days: int,
     seasonal_periods: tuple = DEFAULT_SEASONAL_PERIODS,
-    fast: bool = True,
+    use_box_cox: bool = False,
+    use_damped_trend: bool = True,
+    use_arma_errors: bool = False,
 ) -> TbatsFitResult:
     """Ajusta TBATS sobre una serie diaria y devuelve Ex Post + Forecast.
 
@@ -37,13 +39,23 @@ def fit_and_forecast(
     observaciones no se ajustan aquí — el orquestador debe enrutarlas al
     Modelo Gris Estacional (ver seasonal_grey.py).
 
-    ``fast=True`` (default) fija la forma del modelo (sin Box-Cox, con
-    tendencia no amortiguada, sin errores ARMA) en vez de dejar que TBATS
-    haga grid search sobre esas variantes — imprescindible a nivel masivo:
-    con grid search completo, una sola serie puede tardar 1-2+ minutos
-    (spawnea su propio pool de procesos internamente), lo que no escala a
-    miles de combinaciones PRDID-CUSTID-LOCID. ``fast=False`` habilita el
-    grid search completo para análisis puntual de una serie.
+    Cada uno de los 3 componentes opcionales se fija explícitamente en vez
+    de dejar que TBATS haga grid search sobre ellos (grid search completo
+    puede tardar 1-2+ min por serie, no escala a miles de combinaciones).
+    Benchmark real (serie sintética de 3 años, período semanal, ver
+    CLAUDE.md): con los 3 apagados, ~4s/combinación.
+
+    - ``use_box_cox`` (default False): estabiliza varianza cuando la
+      dispersión crece con el nivel. Costo: ~1.6x (~6.4s). Beneficio bajo
+      salvo que la demanda sea muy heteroscedástica.
+    - ``use_damped_trend`` (default **True**): evita que la tendencia se
+      extrapole sin freno en horizontes largos (relevante para el caso de
+      uso real de este proyecto: 60 días). Costo: ~2.4x (~9.7s). Recomendado
+      activo salvo que el horizonte sea muy corto.
+    - ``use_arma_errors`` (default False): modela autocorrelación residual —
+      ayuda más a precisión de 1 paso que a un forecast de varias semanas.
+      Costo: **~8x (~32s), el más caro de los tres por lejos**. Dejar
+      apagado a nivel masivo salvo que el horizonte sea muy corto.
     """
     if len(y) < MIN_OBS_FOR_TBATS:
         raise ValueError(
@@ -53,13 +65,13 @@ def fit_and_forecast(
 
     periods = tuple(p for p in seasonal_periods if p < len(y) / 2) or (min(7, len(y) // 2),)
 
-    fast_kwargs = (
-        dict(use_box_cox=False, use_trend=True, use_damped_trend=False, use_arma_errors=False)
-        if fast else {}
-    )
     # n_jobs=1: forecast_engine ya paraleliza por combinación (ProcessPoolExecutor);
     # dejar que TBATS spawnee su propio pool interno por serie duplica el paralelismo.
-    estimator = TBATS(seasonal_periods=list(periods), show_warnings=False, n_jobs=1, **fast_kwargs)
+    estimator = TBATS(
+        seasonal_periods=list(periods), show_warnings=False, n_jobs=1,
+        use_box_cox=use_box_cox, use_trend=True,
+        use_damped_trend=use_damped_trend, use_arma_errors=use_arma_errors,
+    )
     fitted_model = estimator.fit(y.to_numpy(dtype=float))
 
     ex_post = pd.Series(fitted_model.y_hat, index=y.index, name="ex_post")

@@ -37,7 +37,10 @@ class RunConfig:
     # académico validado contra los datos reales del cliente (ajustar si hace falta).
     min_nonzero_ratio: float = 0.15
     n_jobs: int = 1
-    tbats_fast: bool = True  # ver tbats_model.fit_and_forecast — False solo para análisis puntual
+    # Ver tbats_model.fit_and_forecast para el costo/beneficio medido de cada uno.
+    tbats_use_box_cox: bool = False
+    tbats_use_damped_trend: bool = True
+    tbats_use_arma_errors: bool = False
 
 
 @dataclass
@@ -120,7 +123,10 @@ def _fit_one(prdid: str, custid: str, locid: str, series: pd.Series, cfg: RunCon
         if model == "tbats":
             if nnz < cfg.min_obs_tbats:
                 raise ValueError(f"TBATS requiere >= {cfg.min_obs_tbats} obs NO-CERO, la serie tiene {nnz} (en {n} días)")
-            res = tbats_model.fit_and_forecast(series, cfg.horizon_days, cfg.seasonal_periods_tbats, cfg.tbats_fast)
+            res = tbats_model.fit_and_forecast(
+                series, cfg.horizon_days, cfg.seasonal_periods_tbats,
+                cfg.tbats_use_box_cox, cfg.tbats_use_damped_trend, cfg.tbats_use_arma_errors,
+            )
         else:
             if nnz < cfg.min_obs_grey:
                 raise ValueError(f"Gris Estacional requiere >= {cfg.min_obs_grey} obs NO-CERO, la serie tiene {nnz}")

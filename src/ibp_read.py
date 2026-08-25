@@ -56,4 +56,8 @@ def read_history(
     out["CANTIDAD"] = pd.to_numeric(out["CANTIDAD"], errors="coerce").fillna(0.0)
     for c in DIM_COLS:
         out[c] = out[c].astype(str)
+    # IBP no garantiza orden cronológico en la paginación -- sin esto, cualquier
+    # gráfico de líneas conecta los puntos en el orden de llegada (zigzag) y
+    # `asfreq("D")` en forecast_engine puede comportarse mal sobre un índice no ordenado.
+    out = out.sort_values(DIM_COLS + ["FECHA"]).reset_index(drop=True)
     return out[DIM_COLS + ["FECHA", "CANTIDAD"]]

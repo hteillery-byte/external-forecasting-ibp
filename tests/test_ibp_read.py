@@ -44,3 +44,26 @@ def test_extra_select_fields_defaults_to_none():
     client = _FakeClient()
     read_history(client, "ZACTUALSQTYDAY")
     assert client.last_select_fields == ["PRDID", "CUSTID", "LOCID", "PERIODID1_TSTAMP", "ZACTUALSQTYDAY"]
+
+
+class _UnsortedFakeClient:
+    """Simula la paginación de IBP devolviendo filas fuera de orden cronológico."""
+
+    def read_key_figure(self, select_fields, **kwargs):
+        return pd.DataFrame({
+            "PRDID": ["P1", "P1", "P1", "P2"],
+            "CUSTID": ["C1", "C1", "C1", "C1"],
+            "LOCID": ["L1", "L1", "L1", "L1"],
+            "PERIODID1_TSTAMP": [
+                "2026-01-03T00:00:00", "2026-01-01T00:00:00",
+                "2026-01-02T00:00:00", "2026-01-01T00:00:00",
+            ],
+            "ZACTUALSQTYDAY": ["3", "1", "2", "9"],
+        })
+
+
+def test_read_history_sorts_by_combo_and_date():
+    out = read_history(_UnsortedFakeClient(), "ZACTUALSQTYDAY")
+    p1 = out[out["PRDID"] == "P1"]
+    assert list(p1["FECHA"]) == sorted(p1["FECHA"])
+    assert list(p1["CANTIDAD"]) == [1.0, 2.0, 3.0]  # sigue el orden de fecha, no el de llegada

@@ -159,6 +159,36 @@ src/
   compartido (barra + tally de modelos usados en vivo + ETA) usado en
   Tabs 3, 4 y 5 — no duplicar esta lógica si se agrega un cuarto lugar que
   corra estas funciones.
+- **Bug real de orden cronológico (2026-08-25)**: `ibp_read.read_history` no
+  ordenaba las filas devueltas por IBP — la paginación no garantiza orden
+  temporal, así que el gráfico de "Histórico real" salía en zigzag (Plotly
+  conecta puntos en el orden del DataFrame, no por fecha). Fix: `read_history`
+  ordena por `DIM_COLS + ["FECHA"]` antes de devolver — corrige el gráfico Y
+  evita un problema latente más serio: `forecast_engine.run_mass_forecast`
+  usa `asfreq("D")` sobre el índice de fechas, que asume orden cronológico.
+  Los Ex Post/Forecast no se vieron afectados porque nacen de una Serie ya
+  ordenada (vía `pd.date_range`/`asfreq`), pero el histórico crudo si podía
+  llegar desordenado desde cualquier consumidor.
+- **Parámetros de TBATS explícitos, no un "modo rápido" bundleado
+  (2026-08-25)**: `fit_and_forecast` reemplazó `fast: bool` por 3 parámetros
+  independientes (`use_box_cox`, `use_damped_trend`, `use_arma_errors`) — el
+  cliente notó, con razón, que agrupar todo en un checkbox sin explicar el
+  costo/beneficio de cada uno no daba una recomendación real. Benchmark real
+  (serie sintética 3 años, período semanal, los 3 apagados = baseline ~4s):
+
+  | Parámetro | Costo medido | Beneficio |
+  |---|---|---|
+  | `use_box_cox` | ~1.6x (~6.4s) | Bajo salvo demanda muy heteroscedástica |
+  | `use_damped_trend` | ~2.4x (~9.7s) | Evita extrapolar tendencia sin freno — relevante para el horizonte de 60 días de este proyecto |
+  | `use_arma_errors` | **~8x (~32s), el más caro por lejos** | Ayuda más a precisión de 1 paso que a un forecast de semanas |
+
+  **Defaults recomendados y ya seteados**: `use_box_cox=False`,
+  `use_damped_trend=True` (el único que vale la pena activar dado el
+  horizonte largo), `use_arma_errors=False`. `RunConfig` tiene los 3 campos
+  (`tbats_use_box_cox`, `tbats_use_damped_trend`, `tbats_use_arma_errors`)
+  con esos mismos defaults. UI: `app.py::tbats_param_controls()` — 3
+  checkboxes independientes con el costo/beneficio en el tooltip, usado en
+  Tabs 3, 4 y 5 (mismo patrón que `make_progress_callback`, no duplicar).
 
 ---
 ## Key Figures reales del tenant (confirmadas por el cliente)

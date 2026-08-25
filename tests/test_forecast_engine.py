@@ -50,7 +50,7 @@ def test_auto_flags_sparse_long_span_as_intermittent_not_tbats():
 
 def test_auto_routes_dense_series_with_enough_history_to_tbats():
     hist = _history_row("P1", "C1", "L1", 40)
-    cfg = RunConfig(model="auto", horizon_days=5, n_jobs=1, tbats_fast=True)
+    cfg = RunConfig(model="auto", horizon_days=5, n_jobs=1)
     summary = run_mass_forecast(hist, cfg)
     assert summary.results[0].model_used == "tbats"
 
