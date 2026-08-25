@@ -59,6 +59,28 @@ def tbats_param_controls(key_prefix: str):
     return use_box_cox, use_damped_trend, use_arma_errors
 
 
+def render_total_summary_chart(series_specs: list[tuple[str, pd.DataFrame, str, str]]) -> None:
+    """Resumen agregado (todas las combinaciones sumadas por fecha).
+
+    ``series_specs``: lista de (nombre_serie, dataframe, columna_fecha,
+    columna_valor). Cada serie se agrupa y suma por fecha antes de graficar
+    — vista "de pájaro" del portafolio completo en vez de combo por combo.
+    """
+    fig = go.Figure()
+    any_data = False
+    for name, df, date_col, value_col in series_specs:
+        if df is None or df.empty:
+            continue
+        agg = df.groupby(date_col)[value_col].sum().reset_index().sort_values(date_col)
+        fig.add_trace(go.Scatter(x=agg[date_col], y=agg[value_col], name=name, mode="lines"))
+        any_data = True
+    if not any_data:
+        st.caption("(sin datos para el resumen total)")
+        return
+    fig.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+
 st.set_page_config(page_title="External Forecasting IBP", layout="wide")
 st.title("External Forecasting IBP — TBATS y Modelo Gris Estacional")
 st.caption(
@@ -390,6 +412,13 @@ with tab_fc:
                     mime="text/csv",
                 )
 
+            st.markdown("### Resumen total (todas las combinaciones sumadas por fecha)")
+            render_total_summary_chart([
+                ("Real histórico (total)", history, "FECHA", "CANTIDAD"),
+                ("Ex Post (total)", summary.ex_post_df, "FECHA", "VALUE"),
+                ("Forecast (total)", summary.forecast_df, "FECHA", "VALUE"),
+            ])
+
             combos = sorted(set(zip(summary.ex_post_df.PRDID, summary.ex_post_df.CUSTID, summary.ex_post_df.LOCID)))
             if combos:
                 sel = st.selectbox("Ver detalle de una combinación", combos, format_func=lambda t: " / ".join(t))
@@ -504,6 +533,12 @@ with tab_backtest:
                 mime="text/csv",
             )
 
+            st.markdown("### Resumen total (todas las combinaciones sumadas por fecha)")
+            render_total_summary_chart([
+                ("Real (holdout, total)", backtest_summary.detail_df, "FECHA", "ACTUAL"),
+                ("Forecast ciego (total)", backtest_summary.detail_df, "FECHA", "FORECAST"),
+            ])
+
             combos_ok = summary_df.dropna(subset=["MAPE_%"])[["PRDID", "CUSTID", "LOCID"]]
             if not combos_ok.empty:
                 combos_list = list(combos_ok.itertuples(index=False, name=None))
@@ -585,6 +620,14 @@ with tab_combined:
 
         combined_df = st.session_state["combined_df"]
         if combined_df is not None and not combined_df.empty:
+            st.markdown("### Resumen total (todas las combinaciones sumadas por fecha)")
+            render_total_summary_chart([
+                ("Real histórico (total)", combined_df[combined_df.SEGMENTO == REAL], "FECHA", "VALOR"),
+                ("Ex Post (total)", combined_df[combined_df.SEGMENTO == EX_POST], "FECHA", "VALOR"),
+                ("Test Phase (total)", combined_df[combined_df.SEGMENTO == TEST_PHASE_FORECAST], "FECHA", "VALOR"),
+                ("Forecast futuro (total)", combined_df[combined_df.SEGMENTO == FORECAST_FUTURO], "FECHA", "VALOR"),
+            ])
+
             combos = sorted(set(zip(combined_df.PRDID, combined_df.CUSTID, combined_df.LOCID)))
             sel = st.selectbox("Ver combinación", combos, format_func=lambda t: " / ".join(t), key="v_sel")
             prdid, custid, locid = sel
