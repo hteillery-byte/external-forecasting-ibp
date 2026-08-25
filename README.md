@@ -1,4 +1,4 @@
-# SMU Forecast — External Forecasting IBP
+# External Forecasting IBP
 
 Pronóstico de demanda diaria y Ex Post a nivel masivo (por combinación
 PRDID × CUSTID × LOCID), usando **TBATS** (corto plazo, multi-estacionalidad)
@@ -7,9 +7,7 @@ Textil Hogar / moda), con lectura y escritura directa de Key Figures en SAP
 IBP vía los Communication Arrangements `SAP_COM_0720` (primario) y
 `SAP_COM_0143` (fallback de lectura).
 
-Contexto de negocio completo: `SMU_Forecast_Modelos_Externos.pptx`
-(SMU Forecast — Modelos matemáticos de forecasting para complementar SAP IBP
-Advanced Demand).
+Modelos matemáticos de forecasting para complementar SAP IBP Advanced Demand.
 
 ## Arquitectura
 

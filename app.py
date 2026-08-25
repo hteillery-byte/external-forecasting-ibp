@@ -1,5 +1,5 @@
-"""SMU Forecast — pronóstico masivo (TBATS + Gris Estacional) con lectura/escritura
-directa de Key Figures en SAP IBP vía SAP_COM_0720 (primario) / SAP_COM_0143 (fallback lectura).
+"""Pronóstico masivo (TBATS + Gris Estacional) con lectura/escritura directa
+de Key Figures en SAP IBP vía SAP_COM_0720 (primario) / SAP_COM_0143 (fallback lectura).
 """
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from src.ibp_client import IBPError, IBPKeyFigureClient
 from src.ibp_export import push_to_ibp
 from src.ibp_read import read_history
 
-st.set_page_config(page_title="SMU Forecast — External Forecasting IBP", layout="wide")
-st.title("SMU Forecast — TBATS y Modelo Gris Estacional")
+st.set_page_config(page_title="External Forecasting IBP", layout="wide")
+st.title("External Forecasting IBP — TBATS y Modelo Gris Estacional")
 st.caption(
     "Pronóstico de demanda diaria y Ex Post a nivel masivo (PRDID × CUSTID × LOCID), "
     "con lectura y escritura directa de Key Figures en SAP IBP (SAP_COM_0720 / SAP_COM_0143)."

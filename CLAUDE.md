@@ -1,4 +1,4 @@
-# CLAUDE.md — SMU Forecast (external-forecasting-ibp)
+# CLAUDE.md — External Forecasting IBP
 > Repositorio: hteillery-byte/external-forecasting-ibp
 
 ---
@@ -7,8 +7,9 @@
 Pronóstico de demanda diaria + Ex Post a nivel masivo (PRDID × CUSTID ×
 LOCID) usando **TBATS** y el **Modelo Gris Estacional (Seasonal GM(1,1))**,
 con lectura/escritura directa de Key Figures en SAP IBP vía
-`SAP_COM_0720`/`SAP_COM_0143`. Origen: `SMU_Forecast_Modelos_Externos.pptx`
-(proyecto SMU, retail Chile).
+`SAP_COM_0720`/`SAP_COM_0143`. Origen: presentación de contexto del proyecto
+(retail Chile), con modelos matemáticos de forecasting pensados para
+complementar SAP IBP Advanced Demand.
 
 **No CSV** — el cliente ya tiene el Communication Arrangement configurado,
 así que la app escribe directo por OData. **Solo Key Figures** — no hay
@@ -65,7 +66,7 @@ src/
 ---
 ## Pendiente / no verificado con datos reales
 
-- Nombres técnicos reales de las Key Figures del tenant SMU (histórico,
+- Nombres técnicos reales de las Key Figures del tenant (histórico,
   Forecast destino, Ex Post destino) — quedan como inputs de la UI, sin
   hardcodear.
 - Nivel de granularidad real del Planning Area (confirmar `PERIODID{N}`
