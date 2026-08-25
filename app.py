@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.backtest import run_backtest
 from src.forecast_engine import RunConfig, run_mass_forecast
 from src.ibp_client import IBPError, IBPKeyFigureClient
 from src.ibp_export import push_to_ibp
@@ -25,11 +26,12 @@ for key, default in {
     "conn_result": None,
     "history": None,
     "summary": None,
+    "backtest_summary": None,
 }.items():
     st.session_state.setdefault(key, default)
 
-tab_conn, tab_hist, tab_fc, tab_export = st.tabs(
-    ["1 · Conexión IBP", "2 · Histórico", "3 · Pronóstico masivo", "4 · Exportar a IBP"]
+tab_conn, tab_hist, tab_fc, tab_backtest, tab_export = st.tabs(
+    ["1 · Conexión IBP", "2 · Histórico", "3 · Pronóstico masivo", "4 · Test Phase (MAPE)", "5 · Exportar a IBP"]
 )
 
 # ----------------------------------------------------------------- Tab 1
@@ -375,6 +377,95 @@ with tab_fc:
                 st.plotly_chart(fig, use_container_width=True)
 
 # ----------------------------------------------------------------- Tab 4
+with tab_backtest:
+    st.subheader("Test Phase Periods — backtest real contra venta ya conocida")
+    st.caption(
+        "Igual a como SAP IBP define \"Test Phase Periods\" (pestaña Forecasting Steps del "
+        "Forecast Model): se reservan los últimos N días de cada combinación como set de "
+        "prueba, se entrena SOLO con el resto, y se pronostica a ciegas hacia ese período — "
+        "el resultado se compara contra la venta real ya conocida. SAP recomienda esto por "
+        "sobre el Ex-Post (ajuste in-sample) para elegir el mejor algoritmo, porque el "
+        "Ex-Post puede sobreestimar la precisión."
+    )
+    history = st.session_state["history"]
+    if history is None or history.empty:
+        st.warning("Lee el histórico en la pestaña 2 primero.")
+    else:
+        b1, b2, b3, b4 = st.columns(4)
+        with b1:
+            test_phase_periods = st.number_input(
+                "Test Phase Periods (días reservados para prueba)", min_value=1, max_value=730, value=151,
+                help="Ej.: backtest enero-mayo 2025 ≈ 151 días.",
+            )
+        with b2:
+            bt_model_choice = st.selectbox("Modelo", ["auto", "tbats", "seasonal_grey"], key="bt_model")
+        with b3:
+            bt_season_length = st.number_input("Largo de estación (Gris Estacional)", min_value=2, max_value=31, value=7, key="bt_season")
+        with b4:
+            bt_n_jobs = st.number_input("Procesos en paralelo", min_value=1, max_value=16, value=1, key="bt_njobs")
+
+        bt_c5, bt_c6 = st.columns(2)
+        with bt_c5:
+            bt_tbats_fast = st.checkbox("TBATS modo rápido", value=True, key="bt_fast")
+        with bt_c6:
+            bt_annual = st.checkbox("TBATS: incluir estacionalidad anual (365.25 días)", value=False, key="bt_annual")
+
+        if st.button("Ejecutar Test Phase", type="primary"):
+            bt_cfg = RunConfig(
+                model=bt_model_choice,
+                season_length=int(bt_season_length),
+                seasonal_periods_tbats=(7, 365.25) if bt_annual else (7,),
+                n_jobs=int(bt_n_jobs),
+                tbats_fast=bt_tbats_fast,
+            )
+            n_combos = history[["PRDID", "CUSTID", "LOCID"]].drop_duplicates().shape[0]
+            with st.spinner(f"Corriendo Test Phase ({test_phase_periods} días) para {n_combos} combinaciones..."):
+                backtest_summary = run_backtest(history, int(test_phase_periods), bt_cfg)
+            st.session_state["backtest_summary"] = backtest_summary
+
+        backtest_summary = st.session_state["backtest_summary"]
+        if backtest_summary is not None:
+            st.markdown("### Resultados")
+            r1, r2, r3 = st.columns(3)
+            r1.metric("MAPE (promedio por combinación)", f"{backtest_summary.overall_mape:.1f}%" if backtest_summary.overall_mape is not None else "—")
+            r2.metric("WMAPE (ponderado por volumen)", f"{backtest_summary.overall_wmape:.1f}%" if backtest_summary.overall_wmape is not None else "—")
+            r3.metric("Combinaciones evaluadas", f"{len(backtest_summary.results):,}")
+
+            st.caption(
+                "MAPE es la métrica oficial pedida por el cliente — se calcula excluyendo días del "
+                "holdout con venta real = 0 (división indefinida); esos días quedan contados aparte "
+                "en 'dias_excluidos_mape'. WMAPE se muestra como respaldo porque no tiene ese problema "
+                "y pondera por volumen en vez de tratar igual a un SKU chico que a uno grande."
+            )
+
+            summary_df = backtest_summary.summary_df
+            st.dataframe(summary_df, use_container_width=True)
+
+            st.download_button(
+                "Descargar resultados Test Phase (CSV)",
+                summary_df.to_csv(index=False).encode("utf-8"),
+                file_name="test_phase_mape.csv",
+                mime="text/csv",
+            )
+
+            combos_ok = summary_df.dropna(subset=["MAPE_%"])[["PRDID", "CUSTID", "LOCID"]]
+            if not combos_ok.empty:
+                combos_list = list(combos_ok.itertuples(index=False, name=None))
+                sel = st.selectbox(
+                    "Ver detalle Test Phase de una combinación", combos_list,
+                    format_func=lambda t: " / ".join(t), key="bt_detail_sel",
+                )
+                prdid, custid, locid = sel
+                detail = backtest_summary.detail_df.query(
+                    "PRDID == @prdid and CUSTID == @custid and LOCID == @locid"
+                )
+                fig_bt = go.Figure()
+                fig_bt.add_trace(go.Scatter(x=detail.FECHA, y=detail.ACTUAL, name="Real (holdout)", mode="lines+markers"))
+                fig_bt.add_trace(go.Scatter(x=detail.FECHA, y=detail.FORECAST, name="Forecast (a ciegas)", mode="lines+markers"))
+                fig_bt.update_layout(height=350, margin=dict(l=10, r=10, t=30, b=10))
+                st.plotly_chart(fig_bt, use_container_width=True)
+
+# ----------------------------------------------------------------- Tab 5
 with tab_export:
     st.subheader("Escribir Forecast y Ex Post en SAP IBP")
     client = st.session_state["client"]

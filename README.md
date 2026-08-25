@@ -12,12 +12,14 @@ Modelos matemáticos de forecasting para complementar SAP IBP Advanced Demand.
 ## Arquitectura
 
 ```
-app.py                     # UI Streamlit — 4 pasos: conexión, histórico, pronóstico, export
+app.py                     # UI Streamlit — 5 pasos: conexión, histórico, pronóstico, Test Phase (MAPE), export
 src/
 ├── ibp_client.py          # Cliente OData v2 IBP — lectura + escritura de Key Figures
 ├── ibp_read.py            # Lee histórico diario y lo normaliza a formato largo
 ├── ibp_export.py          # Traduce resultados del engine al payload de escritura IBP
 ├── forecast_engine.py     # Orquestador masivo: agrupa por combo, elige modelo, corre en paralelo
+├── backtest.py            # Test Phase Periods (holdout real, MAPE/WMAPE) — terminología SAP IBP
+├── period_format.py       # Formato de período estilo IBP ("MAR 2026") para tablas/gráficos
 └── models/
     ├── tbats_model.py     # TBATS (paquete `tbats`) — corto plazo / día
     └── seasonal_grey.py   # Seasonal GM(1,1) — implementación propia, series cortas
@@ -44,20 +46,29 @@ streamlit run app.py
 2. **Histórico** — nombre técnico de la Key Figure con la demanda diaria
    real, columna de período (`PERIODID{N}_TSTAMP`, confirmar el nivel diario
    contra el `$metadata` de la Planning Area).
-3. **Pronóstico masivo** — modelo (`auto` elige TBATS si hay ≥21 días de
-   historia, si no, Gris Estacional), horizonte en días, largo de estación.
-4. **Exportar a IBP** — nombres de las Key Figures destino (Forecast y Ex
+3. **Pronóstico masivo** — modelo (`auto` según densidad de observaciones
+   reales, ver tabla abajo), horizonte en días, largo de estación, y opción
+   de estacionalidad anual en TBATS (ver caveat de rendimiento en `CLAUDE.md`).
+4. **Test Phase (MAPE)** — backtest real: reserva los últimos N días como
+   holdout, entrena solo con el resto, pronostica a ciegas y mide MAPE/WMAPE
+   contra la venta real ya conocida. Mismo concepto que "Test Phase Periods"
+   de SAP IBP (Forecast Model → Forecasting Steps) — recomendado por SAP por
+   sobre el Ex-Post para elegir el mejor algoritmo.
+5. **Exportar a IBP** — nombres de las Key Figures destino (Forecast y Ex
    Post) y escribe ambas vía `SAP_COM_0720` en lotes, con polling de estado.
 
 ## Selección de modelo
 
+`RunConfig.model = "auto"` decide por combinación según **observaciones
+reales (no-cero)**, no por el largo del período:
+
 | Situación | Modelo |
 |-----------|--------|
-| ≥ 21 días de historia diaria | **TBATS** — captura estacionalidad semanal (y anual con ≥2 años) |
-| < 21 días (colecciones nuevas, lanzamientos, Textil Hogar) | **Gris Estacional GM(1,1)** — funciona desde 4 observaciones |
+| ≥ 21 obs. no-cero, densidad ≥ 15% de los días | **TBATS** — captura estacionalidad semanal (y anual, opt-in) |
+| Poca historia pero con señal (≥ 4 obs. no-cero) | **Gris Estacional GM(1,1)** — funciona desde 4 observaciones |
+| Ni una cosa ni la otra | **Se omite** — demanda intermitente, ya cubierta por Croston nativo de IBP Advanced Demand |
 
-`RunConfig.model = "auto"` aplica esta regla por combinación automáticamente;
-también se puede forzar un modelo único para todo el batch.
+También se puede forzar un modelo único para todo el batch.
 
 ## Documentación técnica
 

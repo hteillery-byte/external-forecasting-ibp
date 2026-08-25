@@ -29,12 +29,14 @@ directo).
 ## Estructura
 
 ```
-app.py                     # Streamlit — 4 tabs: conexión / histórico / pronóstico / export
+app.py                     # Streamlit — 5 tabs: conexión / histórico / pronóstico / Test Phase (MAPE) / export
 src/
 ├── ibp_client.py          # IBPKeyFigureClient: read_key_figure, write_key_figures (CSRF + poll)
 ├── ibp_read.py             # read_history() → DataFrame largo (PRDID,CUSTID,LOCID,FECHA,CANTIDAD)
 ├── ibp_export.py           # build_write_rows() / push_to_ibp()
 ├── forecast_engine.py      # run_mass_forecast() — agrupa por combo, auto-selecciona modelo
+├── backtest.py             # run_backtest() — Test Phase Periods (holdout real, MAPE/WMAPE)
+├── period_format.py        # add_period_label_column() — formato IBP ("MAR 2026") para tablas/gráficos
 └── models/
     ├── tbats_model.py       # fit_and_forecast() — MIN_OBS_FOR_TBATS=21
     └── seasonal_grey.py     # fit_and_forecast() — MIN_OBS_FOR_GM11=4, GM(1,1) propio + índice estacional
@@ -108,6 +110,21 @@ src/
   no resuelto: esto no distingue "no estaba asortido" de "vendió cero" (ver
   decisión de no usar `ZPLANNEDPRICEDAY` como filtro de surtido — pendiente
   si el cliente lo pide más adelante).
+- **Test Phase Periods (`src/backtest.py`, Tab 4, 2026-08-25)**: terminología
+  y mecánica tomadas literal de SAP IBP (campo "Test Phase Periods" en
+  Forecasting Steps del Forecast Model — SAP KBA 2701226), NO inventadas.
+  Reserva los últimos N días de cada combo como holdout, entrena SOLO con
+  el resto (`_fit_one` de `forecast_engine.py`, reusado tal cual — la
+  selección de modelo también se decide solo con el train, nunca mirando
+  el test), pronostica a ciegas y compara contra el real ya conocido. SAP
+  recomienda esto por sobre el Ex-Post para elegir el mejor algoritmo
+  (Ex-Post = ajuste in-sample, puede sobreestimar precisión). **MAPE es la
+  métrica oficial pedida por el cliente** (contexto: competencia entre
+  consultores — "gana el menor MAPE" contra un backtest ene-may 2025, ~151
+  días). MAPE excluye días con real=0 del holdout (indefinido, división por
+  cero) — se cuentan aparte en `mape_days_excluded`, nunca se ocultan
+  silenciosamente. WMAPE (`sum|error|/sum|real|`, agregado entre
+  combinaciones) se muestra como respaldo, no reemplaza al MAPE.
 
 ---
 ## Key Figures reales del tenant (confirmadas por el cliente)
